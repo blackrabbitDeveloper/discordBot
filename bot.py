@@ -10,6 +10,8 @@ class Bot(commands.Bot):
 
     async def setup_hook(self):
         await self.load_extension("cogs.moderation")
+        await self.load_extension("cogs.reminder")
+        await self.load_extension("cogs.stock")
         await self.tree.sync()
 
     async def on_ready(self):
