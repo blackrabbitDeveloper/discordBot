@@ -3,4 +3,3 @@ python-dotenv>=1.0,<2
 yfinance>=0.2,<1
 mplfinance>=0.12,<1
 matplotlib>=3.8,<4
-pandas>=2.0,<3

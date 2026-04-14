@@ -1,4 +1,5 @@
 import asyncio
+import os
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
@@ -55,35 +56,26 @@ def _calc_rsi(series, period=14):
 
 _krx_cache: list[dict] | None = None
 
+_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+
 
 def _load_krx() -> list[dict]:
-    """KRX 코스피+코스닥 종목 목록을 로딩합니다."""
+    """로컬 CSV에서 KRX 종목 목록을 로딩합니다."""
     global _krx_cache
     if _krx_cache is not None:
         return _krx_cache
 
-    import pandas as pd
-    from io import StringIO
+    import csv
 
     stocks = []
-    market_suffix = {"유가": ".KS", "코스닥": ".KQ"}
-    for market_type in ["stockMkt", "kosdaqMkt"]:
-        try:
-            r = requests.get(
-                "http://kind.krx.co.kr/corpgeneral/corpList.do",
-                params={"method": "download", "marketType": market_type},
-                timeout=10,
-            )
-            r.encoding = "euc-kr"
-            df = pd.read_html(StringIO(r.text))[0]
-            for _, row in df.iterrows():
-                name = str(row["회사명"]).strip()
-                code = str(row["종목코드"]).strip().zfill(6)
-                market = str(row["시장구분"]).strip()
-                suffix = market_suffix.get(market, ".KS")
-                stocks.append({"name": name, "symbol": f"{code}{suffix}"})
-        except Exception:
-            continue
+    csv_path = os.path.join(_DATA_DIR, "krx_stocks.csv")
+    try:
+        with open(csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                stocks.append({"name": row["name"], "symbol": row["symbol"]})
+    except FileNotFoundError:
+        pass
 
     _krx_cache = stocks
     return stocks

@@ -12,6 +12,7 @@ class Bot(commands.Bot):
         await self.load_extension("cogs.moderation")
         await self.load_extension("cogs.reminder")
         await self.load_extension("cogs.stock")
+        await self.load_extension("cogs.etf")
         await self.tree.sync()
 
     async def on_ready(self):
