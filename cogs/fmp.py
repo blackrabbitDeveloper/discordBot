@@ -1,86 +1,219 @@
 import asyncio
-import os
-from datetime import datetime, timedelta, timezone, time
+import re
+from datetime import datetime, timedelta, timezone
+from xml.etree import ElementTree
 
 import discord
 import requests
+import yfinance as yf
 from discord import app_commands
-from discord.ext import commands, tasks
+from discord.ext import commands
+
+from cogs.fundamental import _resolve_ticker, _has_korean, _ticker_autocomplete
 
 KST = timezone(timedelta(hours=9))
 
-FMP_API_KEY = os.getenv("FMP_API_KEY")
-FMP_BASE = "https://financialmodelingprep.com/api"
+SEC_HEADERS = {"User-Agent": "DiscordBot admin@example.com", "Accept": "application/json"}
+
+# 실적 캘린더 — 주요 대형주 목록
+MAJOR_TICKERS = [
+    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B",
+    "JPM", "V", "UNH", "MA", "HD", "PG", "JNJ", "COST", "ABBV", "BAC",
+    "CRM", "MRK", "AVGO", "KO", "PEP", "TMO", "WMT", "CSCO", "ACN",
+    "MCD", "ABT", "DHR", "NEE", "LIN", "ADBE", "TXN", "PM", "NKE",
+    "ORCL", "NFLX", "AMD", "INTC", "DIS", "PYPL", "QCOM", "LOW",
+    "GS", "MS", "AXP", "CAT", "DE", "UPS",
+]
 
 
-# --- API helpers ---
+# --- 실적 캘린더 (Yahoo Finance) ---
 
-def _fmp_get(path: str, params: dict | None = None) -> list | dict | None:
-    if not FMP_API_KEY:
-        return None
-    try:
-        p = {"apikey": FMP_API_KEY}
-        if params:
-            p.update(params)
-        r = requests.get(f"{FMP_BASE}{path}", params=p, timeout=15)
-        if r.status_code != 200:
-            return None
-        return r.json()
-    except Exception:
-        return None
-
-
-def _fetch_earnings_calendar(from_date: str, to_date: str) -> list[dict]:
-    data = _fmp_get("/v3/earning_calendar", {"from": from_date, "to": to_date})
-    if not data or not isinstance(data, list):
-        return []
+def _fetch_earnings_calendar() -> list[dict]:
+    """주요 대형주의 향후 30일 실적 발표 일정."""
+    today = datetime.now(KST).date()
+    end = today + timedelta(days=30)
     results = []
-    for item in data:
-        symbol = item.get("symbol", "")
-        if not symbol or "." in symbol:  # 미국 주요 종목만
+
+    for symbol in MAJOR_TICKERS:
+        try:
+            t = yf.Ticker(symbol)
+            cal = t.calendar
+            if not cal:
+                continue
+            dates = cal.get("Earnings Date", [])
+            if not dates:
+                continue
+            for d in dates:
+                if hasattr(d, "date"):
+                    d = d.date() if hasattr(d.date, "__call__") else d
+                if today <= d <= end:
+                    results.append({
+                        "symbol": symbol,
+                        "date": str(d),
+                        "eps_est": cal.get("Earnings Average"),
+                        "revenue_est": cal.get("Revenue Average"),
+                    })
+        except Exception:
             continue
-        results.append({
-            "symbol": symbol,
-            "date": item.get("date", ""),
-            "time": item.get("time", ""),  # bmo/amc
-            "eps_est": item.get("epsEstimated"),
-            "revenue_est": item.get("revenueEstimated"),
-        })
+
+    results.sort(key=lambda x: x["date"])
     return results
 
 
-def _fetch_ipo_calendar(from_date: str, to_date: str) -> list[dict]:
-    data = _fmp_get("/v3/ipo_calendar", {"from": from_date, "to": to_date})
-    if not data or not isinstance(data, list):
+# --- 내부자 거래 (SEC EDGAR) ---
+
+# CIK 매핑 캐시 (ticker → CIK)
+_cik_map: dict[str, str] | None = None
+
+
+def _load_cik_map() -> dict[str, str]:
+    """SEC 공식 ticker-CIK 매핑을 로드."""
+    global _cik_map
+    if _cik_map is not None:
+        return _cik_map
+    try:
+        url = "https://www.sec.gov/files/company_tickers.json"
+        r = requests.get(url, headers=SEC_HEADERS, timeout=15)
+        if r.status_code != 200:
+            return {}
+        data = r.json()
+        _cik_map = {
+            val["ticker"]: str(val["cik_str"]).zfill(10)
+            for val in data.values()
+        }
+        return _cik_map
+    except Exception:
+        return {}
+
+
+def _get_cik(symbol: str) -> str | None:
+    """종목 심볼로 SEC CIK 번호를 가져온다."""
+    cik_map = _load_cik_map()
+    return cik_map.get(symbol)
+
+
+def _fetch_insider_trades(symbol: str) -> list[dict]:
+    """SEC EDGAR에서 내부자 거래 내역을 가져온다."""
+    cik = _get_cik(symbol)
+    if not cik:
         return []
-    results = []
-    for item in data:
-        results.append({
-            "symbol": item.get("symbol", ""),
-            "company": item.get("company", ""),
-            "date": item.get("date", ""),
-            "exchange": item.get("exchange", ""),
-            "price_range": item.get("priceRange", ""),
-            "shares": item.get("shares"),
-        })
-    return results
 
+    try:
+        # 회사 filing 목록에서 Form 4 찾기
+        url = f"https://data.sec.gov/submissions/CIK{cik}.json"
+        r = requests.get(url, headers=SEC_HEADERS, timeout=10)
+        if r.status_code != 200:
+            return []
 
-def _fetch_insider_trading(symbol: str) -> list[dict]:
-    data = _fmp_get("/v4/insider-trading", {"symbol": symbol, "page": "0"})
-    if not data or not isinstance(data, list):
+        data = r.json()
+        recent = data.get("filings", {}).get("recent", {})
+        forms = recent.get("form", [])
+        dates = recent.get("filingDate", [])
+        accessions = recent.get("accessionNumber", [])
+
+        # 최근 Form 4, 최대 5건
+        form4s = []
+        for i, f in enumerate(forms):
+            if f == "4" and len(form4s) < 5:
+                form4s.append((dates[i], accessions[i]))
+
+        if not form4s:
+            return []
+
+        # 각 Form 4 XML 파싱
+        results = []
+        for filing_date, acc_no in form4s:
+            trades = _parse_form4(cik, acc_no)
+            for trade in trades:
+                trade["filing_date"] = filing_date
+                results.append(trade)
+
+        return results
+
+    except Exception:
         return []
-    results = []
-    for item in data[:15]:
-        results.append({
-            "name": item.get("reportingName", ""),
-            "type": item.get("transactionType", ""),
-            "date": item.get("transactionDate", ""),
-            "shares": item.get("securitiesTransacted", 0),
-            "price": item.get("price", 0),
-            "title": item.get("typeOfOwner", ""),
-        })
-    return results
+
+
+def _parse_form4(cik: str, acc_no: str) -> list[dict]:
+    """Form 4 XML을 파싱하여 거래 내역을 추출."""
+    try:
+        acc_clean = acc_no.replace("-", "")
+        # filing directory에서 form4.xml 찾기
+        dir_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc_clean}/"
+        r = requests.get(dir_url, headers=SEC_HEADERS, timeout=10)
+        if r.status_code != 200:
+            return []
+
+        xml_files = re.findall(r'href="([^"]*\.xml)"', r.text)
+        xml_path = None
+        for xf in xml_files:
+            if "form4" in xf.lower() or xf.endswith(".xml"):
+                xml_path = xf
+                break
+
+        if not xml_path:
+            return []
+
+        # 절대 경로 처리
+        if xml_path.startswith("/"):
+            xml_url = f"https://www.sec.gov{xml_path}"
+        else:
+            xml_url = f"{dir_url}{xml_path}"
+
+        r2 = requests.get(xml_url, headers=SEC_HEADERS, timeout=10)
+        if r2.status_code != 200:
+            return []
+
+        root = ElementTree.fromstring(r2.text)
+
+        # 이름, 직위 추출
+        def _text(tag):
+            el = root.find(f".//{tag}")
+            return el.text.strip() if el is not None and el.text else ""
+
+        owner_name = _text("rptOwnerName")
+        officer_title = _text("officerTitle")
+
+        # 거래 내역 추출
+        tx_codes = {"P": "매수", "S": "매도", "M": "옵션행사", "F": "세금납부", "A": "수여"}
+        trades = []
+
+        # nonDerivativeTransaction 파싱
+        for tx in root.findall(".//nonDerivativeTransaction"):
+            code_el = tx.find(".//transactionCode")
+            code = code_el.text if code_el is not None else ""
+
+            # transactionShares > value
+            shares_el = tx.find(".//transactionAmounts/transactionShares/value")
+            shares = 0
+            if shares_el is not None and shares_el.text:
+                try:
+                    shares = float(shares_el.text)
+                except ValueError:
+                    pass
+
+            # transactionPricePerShare > value
+            price_el = tx.find(".//transactionAmounts/transactionPricePerShare/value")
+            price = 0
+            if price_el is not None and price_el.text:
+                try:
+                    price = float(price_el.text)
+                except ValueError:
+                    pass
+
+            trades.append({
+                "name": owner_name,
+                "title": officer_title,
+                "code": code,
+                "type": tx_codes.get(code, code),
+                "shares": shares,
+                "price": price,
+            })
+
+        return trades
+
+    except Exception:
+        return []
 
 
 def _fmt_number(n) -> str:
@@ -93,84 +226,36 @@ def _fmt_number(n) -> str:
     return f"${n:,.0f}"
 
 
-def _time_label(t: str) -> str:
-    if t == "bmo":
-        return "장전"
-    if t == "amc":
-        return "장후"
-    return ""
-
-
 # --- Cog ---
 
-class FMP(commands.Cog):
+class MarketData(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._earnings_cache: list[dict] = []
-        self._ipo_cache: list[dict] = []
         self._cache_date: str = ""
-
-    async def cog_load(self):
-        if FMP_API_KEY:
-            self.refresh_cache_task.start()
-
-    async def cog_unload(self):
-        self.refresh_cache_task.cancel()
-
-    # 매일 07:00 KST에 캐시 갱신
-    @tasks.loop(time=[time(7, 0, tzinfo=KST)])
-    async def refresh_cache_task(self):
-        await self._refresh_cache()
-
-    @refresh_cache_task.before_loop
-    async def before_refresh(self):
-        await self.bot.wait_until_ready()
-        # 시작 시 즉시 1회 로드
-        await self._refresh_cache()
-
-    async def _refresh_cache(self):
-        today = datetime.now(KST).date()
-        end = today + timedelta(days=7)
-        from_str = today.isoformat()
-        to_str = end.isoformat()
-
-        earnings = await asyncio.to_thread(_fetch_earnings_calendar, from_str, to_str)
-        ipo = await asyncio.to_thread(_fetch_ipo_calendar, from_str, to_str)
-
-        self._earnings_cache = earnings
-        self._ipo_cache = ipo
-        self._cache_date = from_str
-
-    def _no_api_key_embed(self) -> discord.Embed:
-        return discord.Embed(
-            title="⚠️ FMP API 키 필요",
-            description="이 기능은 FMP API 키가 필요합니다.\n`FMP_API_KEY` 환경변수를 설정해주세요.",
-            color=discord.Color.yellow(),
-        )
 
     @app_commands.checks.cooldown(1, 5)
     @app_commands.command(
-        name="earnings-calendar", description="이번 주 실적 발표 예정 종목"
+        name="earnings-calendar", description="주요 대형주 실적 발표 일정"
     )
     async def earnings_calendar(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        if not FMP_API_KEY:
-            await interaction.followup.send(embed=self._no_api_key_embed(), ephemeral=True)
-            return
-
-        if not self._earnings_cache:
-            await self._refresh_cache()
+        today = datetime.now(KST).strftime("%Y-%m-%d")
+        if self._cache_date != today or not self._earnings_cache:
+            self._earnings_cache = await asyncio.to_thread(_fetch_earnings_calendar)
+            self._cache_date = today
 
         data = self._earnings_cache
+
         embed = discord.Embed(
-            title="📊 이번 주 실적 발표 일정",
+            title="📊 실적 발표 일정 (향후 30일)",
             color=discord.Color.blue(),
             timestamp=datetime.now(KST),
         )
 
         if not data:
-            embed.description = "이번 주 예정된 실적 발표가 없습니다."
+            embed.description = "예정된 실적 발표가 없습니다."
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
@@ -179,133 +264,94 @@ class FMP(commands.Cog):
         for item in data:
             grouped.setdefault(item["date"], []).append(item)
 
-        count = 0
+        from datetime import date as dt_date
         for date_str in sorted(grouped.keys()):
-            if count >= 20:
-                break
             items = grouped[date_str]
             lines = []
             for item in items[:10]:
-                time_str = _time_label(item["time"])
-                eps = f"EPS est: ${item['eps_est']:.2f}" if item["eps_est"] else ""
-                rev = _fmt_number(item["revenue_est"]) if item["revenue_est"] else ""
                 parts = [f"**{item['symbol']}**"]
-                if time_str:
-                    parts.append(f"({time_str})")
-                if eps:
-                    parts.append(f"· {eps}")
-                if rev:
-                    parts.append(f"· 매출 {rev}")
-                lines.append(" ".join(parts))
+                if item["eps_est"]:
+                    parts.append(f"EPS est: ${item['eps_est']:.2f}")
+                if item["revenue_est"]:
+                    parts.append(f"매출 {_fmt_number(item['revenue_est'])}")
+                lines.append(" · ".join(parts))
             if len(items) > 10:
                 lines.append(f"... 외 {len(items) - 10}개")
 
             try:
-                from datetime import date
-                dt = date.fromisoformat(date_str)
+                dt = dt_date.fromisoformat(date_str)
                 weekday = ["월", "화", "수", "목", "금", "토", "일"][dt.weekday()]
                 header = f"📅 {dt.month}/{dt.day} ({weekday})"
             except ValueError:
                 header = f"📅 {date_str}"
 
             embed.add_field(name=header, value="\n".join(lines), inline=False)
-            count += 1
 
-        embed.set_footer(text="Financial Modeling Prep · 캐시 데이터")
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
-    @app_commands.checks.cooldown(1, 5)
-    @app_commands.command(name="ipo", description="신규 상장(IPO) 예정 종목")
-    async def ipo(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-
-        if not FMP_API_KEY:
-            await interaction.followup.send(embed=self._no_api_key_embed(), ephemeral=True)
-            return
-
-        if not self._ipo_cache:
-            await self._refresh_cache()
-
-        data = self._ipo_cache
-        embed = discord.Embed(
-            title="🆕 신규 상장(IPO) 예정",
-            color=discord.Color.green(),
-            timestamp=datetime.now(KST),
-        )
-
-        if not data:
-            embed.description = "이번 주 예정된 IPO가 없습니다."
-            await interaction.followup.send(embed=embed, ephemeral=True)
-            return
-
-        lines = []
-        for item in data[:15]:
-            parts = [f"**{item['symbol']}** — {item['company']}"]
-            if item["date"]:
-                parts.append(f"📅 {item['date']}")
-            if item["price_range"]:
-                parts.append(f"💰 {item['price_range']}")
-            if item["exchange"]:
-                parts.append(f"🏛️ {item['exchange']}")
-            lines.append("\n".join(parts))
-
-        embed.description = "\n\n".join(lines)
-        if len(data) > 15:
-            embed.description += f"\n\n... 외 {len(data) - 15}개"
-
-        embed.set_footer(text="Financial Modeling Prep · 캐시 데이터")
+        embed.set_footer(text="Yahoo Finance · 일 1회 캐시")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.checks.cooldown(1, 5)
     @app_commands.command(
-        name="insider", description="종목의 내부자(임원) 거래 내역을 조회합니다"
+        name="insider", description="종목의 내부자(임원) 거래 내역 (SEC EDGAR)"
     )
     @app_commands.describe(ticker="종목 코드 (예: AAPL)")
+    @app_commands.autocomplete(ticker=_ticker_autocomplete)
     async def insider(self, interaction: discord.Interaction, ticker: str):
         await interaction.response.defer(ephemeral=True)
 
-        if not FMP_API_KEY:
-            await interaction.followup.send(embed=self._no_api_key_embed(), ephemeral=True)
+        resolved = _resolve_ticker(ticker) if _has_korean(ticker) else ticker.upper()
+        if resolved is None:
+            await interaction.followup.send(
+                f"`{ticker}` 종목을 찾을 수 없습니다.", ephemeral=True
+            )
             return
 
-        symbol = ticker.upper().strip()
-        data = await asyncio.to_thread(_fetch_insider_trading, symbol)
+        # .KS / .KQ 제거 (한국 종목은 SEC에 없음)
+        if resolved.endswith((".KS", ".KQ")):
+            await interaction.followup.send(
+                "한국 종목은 SEC 내부자 거래 조회가 불가합니다. 미국 종목만 지원됩니다.",
+                ephemeral=True,
+            )
+            return
+
+        data = await asyncio.to_thread(_fetch_insider_trades, resolved)
 
         embed = discord.Embed(
-            title=f"🕵️ {symbol} 내부자 거래",
+            title=f"🕵️ {resolved} 내부자 거래",
             color=discord.Color.dark_purple(),
             timestamp=datetime.now(KST),
         )
 
         if not data:
-            embed.description = "내부자 거래 데이터가 없습니다."
+            embed.description = "최근 내부자 거래 내역이 없습니다."
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
         lines = []
         for item in data:
-            tx_type = item["type"]
-            if "Purchase" in tx_type or "Buy" in tx_type:
-                icon = "🟢 매수"
-            elif "Sale" in tx_type or "Sell" in tx_type:
-                icon = "🔴 매도"
+            code = item.get("code", "")
+            if code == "P":
+                icon = "🟢"
+            elif code == "S":
+                icon = "🔴"
+            elif code == "M":
+                icon = "🔵"
             else:
-                icon = f"⚪ {tx_type}"
+                icon = "⚪"
 
             shares = f"{item['shares']:,.0f}주" if item["shares"] else ""
             price = f"@ ${item['price']:,.2f}" if item["price"] else ""
-            name = item["name"] or "Unknown"
-            title_str = f" ({item['title']})" if item["title"] else ""
+            title_str = f" ({item['title']})" if item.get("title") else ""
 
             lines.append(
-                f"{icon} **{name}**{title_str}\n"
-                f"　{item['date']} · {shares} {price}"
+                f"{icon} **{item['type']}** — {item['name']}{title_str}\n"
+                f"　{item.get('filing_date', '')} · {shares} {price}"
             )
 
         embed.description = "\n".join(lines)
-        embed.set_footer(text="Financial Modeling Prep")
+        embed.set_footer(text="SEC EDGAR Form 4")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(FMP(bot))
+    await bot.add_cog(MarketData(bot))

@@ -4,7 +4,6 @@ import os
 from datetime import datetime, timedelta, time, timezone, date
 
 import discord
-import requests
 from discord import app_commands
 from discord.ext import commands, tasks
 
@@ -12,8 +11,6 @@ KST = timezone(timedelta(hours=9))
 
 _DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 _CALENDAR_PATH = os.path.join(_DATA_DIR, "economic_calendar.json")
-
-FMP_API_KEY = os.getenv("FMP_API_KEY")
 
 COUNTRY_FLAG = {"US": "\U0001f1fa\U0001f1f8", "KR": "\U0001f1f0\U0001f1f7"}
 IMPORTANCE_ICON = {"high": "\U0001f534", "medium": "\U0001f7e1", "low": "\u26aa"}
@@ -30,53 +27,9 @@ def _load_calendar() -> list[dict]:
         return []
 
 
-def _fetch_fmp_events(from_date: str, to_date: str) -> list[dict]:
-    """FMP API에서 경제 캘린더 보강 데이터를 가져온다."""
-    if not FMP_API_KEY:
-        return []
-    try:
-        r = requests.get(
-            "https://financialmodelingprep.com/api/v3/economic_calendar",
-            params={"from": from_date, "to": to_date, "apikey": FMP_API_KEY},
-            timeout=10,
-        )
-        if r.status_code != 200:
-            return []
-        events = []
-        for item in r.json():
-            country = item.get("country", "")
-            if country not in ("US", "KR"):
-                continue
-            impact = item.get("impact", "").lower()
-            if impact not in ("high", "medium"):
-                continue
-            event_name = item.get("event", "")
-            dt_str = item.get("date", "")
-            if not dt_str:
-                continue
-            try:
-                dt = datetime.fromisoformat(dt_str)
-            except ValueError:
-                continue
-            events.append({
-                "date": dt.strftime("%Y-%m-%d"),
-                "time": dt.strftime("%H:%M"),
-                "country": country,
-                "name": event_name,
-                "importance": impact,
-                "description": event_name,
-                "source": "fmp",
-            })
-        return events
-    except Exception:
-        return []
-
-
 def _get_events_for_range(start: date, end: date) -> list[dict]:
-    """지정 기간의 이벤트를 JSON + FMP에서 가져와 날짜순 정렬."""
+    """지정 기간의 이벤트를 JSON에서 가져와 날짜순 정렬."""
     events = []
-
-    # JSON 로컬 데이터
     for ev in _load_calendar():
         try:
             ev_date = date.fromisoformat(ev["date"])
@@ -84,16 +37,6 @@ def _get_events_for_range(start: date, end: date) -> list[dict]:
             continue
         if start <= ev_date <= end:
             events.append(ev)
-
-    # FMP 보강
-    fmp_events = _fetch_fmp_events(start.isoformat(), end.isoformat())
-    # 중복 제거: 같은 날짜 + 같은 이름은 JSON 우선
-    existing = {(e["date"], e["name"]) for e in events}
-    for fmp_ev in fmp_events:
-        key = (fmp_ev["date"], fmp_ev["name"])
-        if key not in existing:
-            events.append(fmp_ev)
-
     events.sort(key=lambda e: (e["date"], e.get("time", "00:00")))
     return events
 
@@ -140,10 +83,7 @@ def _build_calendar_embed(
             value = value[:1020] + "..."
         embed.add_field(name=header, value=value, inline=False)
 
-    source = "JSON"
-    if FMP_API_KEY:
-        source += " + FMP"
-    embed.set_footer(text=f"경제 캘린더 \u00b7 {source}")
+    embed.set_footer(text="경제 캘린더")
     return embed
 
 
