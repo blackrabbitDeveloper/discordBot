@@ -15,12 +15,16 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "
 
 NAVER_HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-# 감시할 지수
-WATCH_INDICES = [
+# 감시할 지수 (미국)
+WATCH_INDICES_US = [
     ("S&P 500", "^GSPC"),
     ("나스닥", "^IXIC"),
-    ("코스피", "^KS11"),
-    ("코스닥", "^KQ11"),
+]
+
+# 감시할 지수 (한국 — 네이버)
+WATCH_INDICES_KR = [
+    ("코스피", "KOSPI"),
+    ("코스닥", "KOSDAQ"),
 ]
 
 # 미국 장 마감 요약 항목
@@ -308,37 +312,51 @@ class AutoPost(commands.Cog):
     # --- 급등/급락 알림 (5분마다) ---
     @tasks.loop(minutes=5)
     async def price_alert_task(self):
-        for name, symbol in WATCH_INDICES:
-            data = _fetch_quote(symbol)
-            if data is None:
+        # 미국 지수 — Yahoo Finance
+        for name, symbol in WATCH_INDICES_US:
+            await self._check_alert(name, symbol, _fetch_quote(symbol))
+
+        # 한국 지수 — 네이버 금융 (정확한 변동률)
+        for name, market in WATCH_INDICES_KR:
+            naver = _fetch_naver_index(market)
+            if naver is None:
                 continue
+            pct = float(naver["change_pct"])
+            if naver["direction"] in ("FALLING", "LOWER_LIMIT"):
+                pct = -abs(pct)
+            data = {"price": float(naver["close"]), "change_pct": pct}
+            await self._check_alert(name, market, data)
 
-            pct = data["change_pct"]
-            last = self._last_alert.get(symbol)
+    async def _check_alert(self, name: str, key: str, data: dict | None):
+        if data is None:
+            return
 
-            if last is not None and abs(pct) <= abs(last):
-                continue
+        pct = data["change_pct"]
+        last = self._last_alert.get(key)
 
-            if abs(pct) >= ALERT_THRESHOLD:
-                self._last_alert[symbol] = pct
-                sign = "+" if pct >= 0 else ""
-                if pct >= ALERT_THRESHOLD:
-                    title = f"🚀 {name} 급등 알림"
-                    color = discord.Color.green()
-                else:
-                    title = f"🔻 {name} 급락 알림"
-                    color = discord.Color.red()
+        if last is not None and abs(pct) <= abs(last):
+            return
 
-                embed = discord.Embed(
-                    title=title,
-                    description=f"**{data['price']:,.2f}** ({sign}{pct:.2f}%)",
-                    color=color,
-                    timestamp=datetime.now(KST),
-                )
-                await self._send_to_channels("price_alert", embed)
+        if abs(pct) >= ALERT_THRESHOLD:
+            self._last_alert[key] = pct
+            sign = "+" if pct >= 0 else ""
+            if pct >= ALERT_THRESHOLD:
+                title = f"🚀 {name} 급등 알림"
+                color = discord.Color.green()
             else:
-                if symbol in self._last_alert:
-                    del self._last_alert[symbol]
+                title = f"🔻 {name} 급락 알림"
+                color = discord.Color.red()
+
+            embed = discord.Embed(
+                title=title,
+                description=f"**{data['price']:,.2f}** ({sign}{pct:.2f}%)",
+                color=color,
+                timestamp=datetime.now(KST),
+            )
+            await self._send_to_channels("price_alert", embed)
+        else:
+            if key in self._last_alert:
+                del self._last_alert[key]
 
     @price_alert_task.before_loop
     async def before_price_alert(self):
