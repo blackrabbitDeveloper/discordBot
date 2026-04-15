@@ -51,6 +51,7 @@ class Exchange(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="exchange", description="주요 환율을 조회합니다")
     async def exchange(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -90,6 +91,7 @@ class Exchange(commands.Cog):
         embed.set_footer(text="Yahoo Finance · 실시간 데이터와 차이가 있을 수 있습니다")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="exchange-calc", description="환율 계산기")
     @app_commands.describe(
         amount="금액",

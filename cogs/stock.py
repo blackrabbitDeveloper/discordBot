@@ -152,6 +152,7 @@ class Stock(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="stock-search", description="종목명으로 검색합니다 (한글/영어)")
     @app_commands.describe(query="검색어 (예: 삼성전자, samsung, apple)")
     async def stock_search(self, interaction: discord.Interaction, query: str):
@@ -175,6 +176,7 @@ class Stock(commands.Cog):
             ephemeral=True,
         )
 
+    @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="stock", description="종목의 현재 주가 정보를 조회합니다")
     @app_commands.describe(ticker="종목코드 또는 회사명 (예: AAPL, 삼성전자, 005930.KS)")
     @app_commands.autocomplete(ticker=_ticker_autocomplete)
@@ -219,6 +221,7 @@ class Stock(commands.Cog):
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="stock-chart", description="종목의 캔들스틱 차트를 생성합니다")
     @app_commands.describe(
         ticker="종목코드 또는 회사명 (예: AAPL, 삼성전자, 005930.KS)",
@@ -254,6 +257,7 @@ class Stock(commands.Cog):
             f"**{resolved}** {label} 차트", file=file, ephemeral=True
         )
 
+    @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="stock-analysis", description="종목의 기술적 분석을 제공합니다")
     @app_commands.describe(ticker="종목코드 또는 회사명 (예: AAPL, 삼성전자, 005930.KS)")
     @app_commands.autocomplete(ticker=_ticker_autocomplete)

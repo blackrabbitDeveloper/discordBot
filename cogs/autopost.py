@@ -312,13 +312,20 @@ class AutoPost(commands.Cog):
     # --- 급등/급락 알림 (5분마다) ---
     @tasks.loop(minutes=5)
     async def price_alert_task(self):
+        # 날짜 변경 시 알림 상태 초기화
+        today = datetime.now(KST).date()
+        if getattr(self, "_last_alert_date", None) != today:
+            self._last_alert.clear()
+            self._last_alert_date = today
+
         # 미국 지수 — Yahoo Finance
         for name, symbol in WATCH_INDICES_US:
-            await self._check_alert(name, symbol, _fetch_quote(symbol))
+            quote = await asyncio.to_thread(_fetch_quote, symbol)
+            await self._check_alert(name, symbol, quote)
 
         # 한국 지수 — 네이버 금융 (정확한 변동률)
         for name, market in WATCH_INDICES_KR:
-            naver = _fetch_naver_index(market)
+            naver = await asyncio.to_thread(_fetch_naver_index, market)
             if naver is None:
                 continue
             pct = float(naver["change_pct"])

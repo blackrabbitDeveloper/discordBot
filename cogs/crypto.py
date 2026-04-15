@@ -74,6 +74,7 @@ class Crypto(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="crypto", description="주요 암호화폐 시세를 조회합니다")
     async def crypto(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -110,6 +111,7 @@ class Crypto(commands.Cog):
         embed.set_footer(text="Yahoo Finance · 실시간 데이터와 차이가 있을 수 있습니다")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="crypto-detail", description="특정 암호화폐의 상세 정보를 조회합니다")
     @app_commands.describe(coin="암호화폐 (예: BTC-USD, ETH-USD)")
     async def crypto_detail(self, interaction: discord.Interaction, coin: str):

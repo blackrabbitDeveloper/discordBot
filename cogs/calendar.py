@@ -222,7 +222,7 @@ class Calendar(commands.Cog):
             target = now.date()
             label = "오늘"
 
-        events = _get_events_for_date(target)
+        events = await asyncio.to_thread(_get_events_for_date, target)
         embed = _build_alert_embed(label, target, events)
         if embed is None:
             return

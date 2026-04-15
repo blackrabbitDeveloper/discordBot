@@ -112,6 +112,7 @@ class News(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="stock-news", description="종목 관련 한국어 뉴스를 검색합니다")
     @app_commands.describe(
         query="종목명 또는 키워드 (예: 삼성전자, 반도체, 코스피)",

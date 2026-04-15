@@ -79,6 +79,7 @@ class Market(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="market", description="글로벌 시장 개요를 한눈에 봅니다")
     async def market(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)

@@ -142,6 +142,7 @@ class ETF(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="etf", description="ETF 기본 정보를 조회합니다")
     @app_commands.describe(ticker="ETF 코드 또는 이름 (예: SPY, KODEX 200)")
     @app_commands.autocomplete(ticker=_etf_autocomplete)
@@ -201,6 +202,7 @@ class ETF(commands.Cog):
         embed.set_footer(text="Yahoo Finance")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="etf-holdings", description="ETF 상위 구성종목을 조회합니다")
     @app_commands.describe(ticker="ETF 코드 또는 이름 (예: SPY, KODEX 200)")
     @app_commands.autocomplete(ticker=_etf_autocomplete)
@@ -242,6 +244,7 @@ class ETF(commands.Cog):
         embed.set_footer(text="Yahoo Finance")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="etf-chart", description="ETF 차트를 생성합니다")
     @app_commands.describe(
         ticker="ETF 코드 또는 이름 (예: SPY, KODEX 200)",
@@ -276,6 +279,7 @@ class ETF(commands.Cog):
             f"**{resolved}** {label} 차트", file=file, ephemeral=True
         )
 
+    @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="etf-search", description="ETF를 검색합니다")
     @app_commands.describe(query="검색어 (예: KODEX, TIGER, SPY, NASDAQ)")
     async def etf_search(self, interaction: discord.Interaction, query: str):

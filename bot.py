@@ -1,4 +1,5 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 
@@ -7,6 +8,18 @@ class Bot(commands.Bot):
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(command_prefix="!", intents=intents)
+        self.tree.on_error = self._on_app_command_error
+
+    async def _on_app_command_error(
+        self, interaction: discord.Interaction, error: app_commands.AppCommandError
+    ):
+        if isinstance(error, app_commands.CommandOnCooldown):
+            await interaction.response.send_message(
+                f"⏳ 잠시 후 다시 시도해주세요 ({error.retry_after:.0f}초)",
+                ephemeral=True,
+            )
+        else:
+            raise error
 
     async def setup_hook(self):
         await self.load_extension("cogs.moderation")

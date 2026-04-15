@@ -177,6 +177,7 @@ class Fundamental(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="dividend", description="종목의 배당 정보를 조회합니다")
     @app_commands.describe(ticker="종목코드 또는 회사명")
     @app_commands.autocomplete(ticker=_ticker_autocomplete)
@@ -202,7 +203,7 @@ class Fundamental(commands.Cog):
         if data["dividend_rate"]:
             embed.add_field(name="연간 배당금", value=_fmt_price(data["dividend_rate"]), inline=True)
         if data["dividend_yield"]:
-            embed.add_field(name="배당 수익률", value=f"{data['dividend_yield']:.2f}%", inline=True)
+            embed.add_field(name="배당 수익률", value=f"{data['dividend_yield'] * 100:.2f}%", inline=True)
         if data["payout_ratio"]:
             embed.add_field(name="배당 성향", value=f"{data['payout_ratio'] * 100:.1f}%", inline=True)
         if data["ex_date"]:
@@ -219,6 +220,7 @@ class Fundamental(commands.Cog):
         embed.set_footer(text="Yahoo Finance")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="earnings", description="종목의 실적 발표 일정과 추정치를 조회합니다")
     @app_commands.describe(ticker="종목코드 또는 회사명")
     @app_commands.autocomplete(ticker=_ticker_autocomplete)
@@ -290,6 +292,7 @@ class Fundamental(commands.Cog):
         embed.set_footer(text="Yahoo Finance")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="sector", description="미국 섹터별 등락률을 조회합니다")
     async def sector(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)

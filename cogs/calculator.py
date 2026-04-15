@@ -145,6 +145,7 @@ class Calculator(commands.Cog):
         embed.set_footer(text="복리 기준 · 세금/수수료 미반영")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="dividend-calc", description="배당금 계산기 — 투자 시 예상 연간 배당금")
     @app_commands.describe(
         ticker="종목코드 또는 회사명",
