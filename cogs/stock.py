@@ -258,7 +258,7 @@ class Stock(commands.Cog):
         )
 
     @app_commands.checks.cooldown(1, 5)
-    @app_commands.command(name="stock-analysis", description="종목의 기술적 분석을 제공합니다")
+    @app_commands.command(name="stock-analysis", description="종목의 기술적 분석 + 펀더멘탈을 제공합니다")
     @app_commands.describe(ticker="종목코드 또는 회사명 (예: AAPL, 삼성전자, 005930.KS)")
     @app_commands.autocomplete(ticker=_ticker_autocomplete)
     async def stock_analysis(self, interaction: discord.Interaction, ticker: str):
@@ -354,6 +354,39 @@ class Stock(commands.Cog):
 
         # 거래량 추세
         embed.add_field(name="📦 거래량 추세", value=result["vol_trend"], inline=True)
+
+        # 펀더멘탈
+        fd = result.get("fundamental", {})
+        fd_lines = []
+        if fd.get("per") is not None:
+            fd_lines.append(f"**PER**: {fd['per']:.1f}")
+        if fd.get("forward_per") is not None:
+            fd_lines.append(f"**Forward PER**: {fd['forward_per']:.1f}")
+        if fd.get("pbr") is not None:
+            fd_lines.append(f"**PBR**: {fd['pbr']:.2f}")
+        if fd.get("psr") is not None:
+            fd_lines.append(f"**PSR**: {fd['psr']:.2f}")
+        if fd.get("roe") is not None:
+            fd_lines.append(f"**ROE**: {fd['roe'] * 100:.1f}%")
+        if fd.get("profit_margin") is not None:
+            fd_lines.append(f"**영업이익률**: {fd['profit_margin'] * 100:.1f}%")
+        if fd.get("debt_equity") is not None:
+            fd_lines.append(f"**부채비율**: {fd['debt_equity']:.0f}%")
+        if fd.get("dividend_yield") is not None:
+            fd_lines.append(f"**배당수익률**: {fd['dividend_yield'] * 100:.2f}%")
+        if fd_lines:
+            embed.add_field(name="💼 펀더멘탈", value="\n".join(fd_lines), inline=True)
+
+        # 시가총액
+        mc = fd.get("market_cap")
+        if mc:
+            if mc >= 1e12:
+                mc_str = f"${mc / 1e12:,.2f}T"
+            elif mc >= 1e9:
+                mc_str = f"${mc / 1e9:,.1f}B"
+            else:
+                mc_str = f"${mc / 1e6:,.0f}M"
+            embed.add_field(name="🏢 시가총액", value=mc_str, inline=True)
 
         # 종합 신호
         embed.add_field(name="🏁 종합 신호", value=result["signal"], inline=False)
@@ -590,6 +623,20 @@ class Stock(commands.Cog):
             else:
                 signal = f"⚪ **중립** ({bull_pct:.0f}% 긍정 / {100-bull_pct:.0f}% 부정)"
 
+            # --- 펀더멘탈 ---
+            fundamental = {
+                "per": info.get("trailingPE"),
+                "forward_per": info.get("forwardPE"),
+                "psr": info.get("priceToSalesTrailing12Months"),
+                "pbr": info.get("priceToBook"),
+                "roe": info.get("returnOnEquity"),
+                "profit_margin": info.get("profitMargins"),
+                "debt_equity": info.get("debtToEquity"),
+                "current_ratio": info.get("currentRatio"),
+                "market_cap": info.get("marketCap"),
+                "dividend_yield": info.get("dividendYield"),
+            }
+
             return {
                 "name": name,
                 "price": curr,
@@ -601,6 +648,7 @@ class Stock(commands.Cog):
                 "support_resistance": support_resistance,
                 "vol_trend": vol_trend,
                 "signal": signal,
+                "fundamental": fundamental,
             }
         except Exception:
             return None
