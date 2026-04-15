@@ -1,4 +1,5 @@
 import asyncio
+import os
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
@@ -34,21 +35,27 @@ US_SECTORS = [
 ]
 
 
-# --- 한글 폰트 설정 ---
+# --- 한글 폰트 설정 (프로젝트 내장 폰트 우선) ---
 
-def _get_korean_font():
-    """시스템에서 한글 폰트를 찾아 반환."""
-    korean_fonts = ["Malgun Gothic", "맑은 고딕", "NanumGothic", "AppleGothic"]
-    available = {f.name for f in fm.fontManager.ttflist}
-    for name in korean_fonts:
-        if name in available:
+_FONT_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "data", "fonts", "NotoSansKR-Bold.ttf"
+)
+
+def _load_font():
+    """프로젝트 내장 폰트 → 시스템 폰트 → 기본 폰트 순으로 로드."""
+    if os.path.exists(_FONT_PATH):
+        fm.fontManager.addfont(_FONT_PATH)
+        font_name = fm.FontProperties(fname=_FONT_PATH).get_name()
+        plt.rcParams["font.family"] = font_name
+        return font_name
+    # 시스템 폰트 폴백
+    for name in ["Malgun Gothic", "NanumGothic", "AppleGothic"]:
+        if name in {f.name for f in fm.fontManager.ttflist}:
+            plt.rcParams["font.family"] = name
             return name
     return None
 
-
-_KOREAN_FONT = _get_korean_font()
-if _KOREAN_FONT:
-    plt.rcParams["font.family"] = _KOREAN_FONT
+_FONT_NAME = _load_font()
 plt.rcParams["axes.unicode_minus"] = False
 
 
@@ -59,9 +66,13 @@ def _fetch_us_sector_data() -> list[dict]:
     for name, symbol, weight in US_SECTORS:
         try:
             t = yf.Ticker(symbol)
-            info = t.info
-            price = info.get("regularMarketPrice")
-            prev = info.get("regularMarketPreviousClose", price)
+            fi = t.fast_info
+            price = fi.get("lastPrice") or fi.get("last_price")
+            prev = fi.get("previousClose") or fi.get("previous_close")
+            if not price or not prev:
+                info = t.info
+                price = info.get("regularMarketPrice")
+                prev = info.get("regularMarketPreviousClose", price)
             if price and prev:
                 change_pct = (price - prev) / prev * 100
                 results.append({
