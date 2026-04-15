@@ -4,3 +4,4 @@ yfinance>=0.2,<1
 mplfinance>=0.12,<1
 matplotlib>=3.8,<4
 requests>=2.31,<3
+squarify>=0.4,<1

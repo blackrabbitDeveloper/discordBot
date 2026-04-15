@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 from datetime import datetime, timedelta, time, timezone
+from io import BytesIO
 
 import discord
 import requests
@@ -272,7 +273,18 @@ class AutoPost(commands.Cog):
             embed.add_field(name="📈 상승률 상위", value="\n".join(lines), inline=False)
 
         embed.set_footer(text="네이버 금융 · 자동 요약")
-        await self._send_to_channels("market_summary", embed)
+
+        # 한국 시가총액 히트맵 첨부
+        try:
+            from cogs.heatmap import generate_kr_heatmap
+            img_bytes = (await asyncio.to_thread(generate_kr_heatmap)).read()
+            embed.set_image(url="attachment://kr_heatmap.png")
+            await self._send_to_channels(
+                "market_summary", embed,
+                file_factory=lambda: discord.File(BytesIO(img_bytes), filename="kr_heatmap.png"),
+            )
+        except Exception:
+            await self._send_to_channels("market_summary", embed)
 
     @kr_summary_task.before_loop
     async def before_kr_summary(self):
@@ -303,7 +315,18 @@ class AutoPost(commands.Cog):
 
         embed.add_field(name="시장 현황", value="\n".join(lines), inline=False)
         embed.set_footer(text="Yahoo Finance · 자동 요약")
-        await self._send_to_channels("market_summary", embed)
+
+        # 미국 섹터 히트맵 첨부
+        try:
+            from cogs.heatmap import generate_us_heatmap
+            img_bytes = (await asyncio.to_thread(generate_us_heatmap)).read()
+            embed.set_image(url="attachment://us_heatmap.png")
+            await self._send_to_channels(
+                "market_summary", embed,
+                file_factory=lambda: discord.File(BytesIO(img_bytes), filename="us_heatmap.png"),
+            )
+        except Exception:
+            await self._send_to_channels("market_summary", embed)
 
     @us_summary_task.before_loop
     async def before_us_summary(self):
@@ -370,14 +393,19 @@ class AutoPost(commands.Cog):
         await self.bot.wait_until_ready()
 
     # --- Helper ---
-    async def _send_to_channels(self, channel_type: str, embed: discord.Embed):
+    async def _send_to_channels(
+        self, channel_type: str, embed: discord.Embed, *, file_factory=None,
+    ):
         for guild in self.bot.guilds:
             ch_id = _get_channel_id(guild.id, channel_type)
             if ch_id:
                 channel = guild.get_channel(ch_id)
                 if channel:
                     try:
-                        await channel.send(embed=embed)
+                        if file_factory:
+                            await channel.send(embed=embed, file=file_factory())
+                        else:
+                            await channel.send(embed=embed)
                     except discord.Forbidden:
                         pass
 
