@@ -35,6 +35,7 @@ class Bot(commands.Bot):
         await self.load_extension("cogs.calculator")
         await self.load_extension("cogs.calendar")
         await self.load_extension("cogs.heatmap")
+        await self.load_extension("cogs.fmp")
         await self.load_extension("cogs.autopost")
         await self.tree.sync()
 
