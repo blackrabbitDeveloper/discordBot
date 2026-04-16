@@ -373,7 +373,7 @@ class Stock(commands.Cog):
         if fd.get("debt_equity") is not None:
             fd_lines.append(f"**부채비율**: {fd['debt_equity']:.0f}%")
         if fd.get("dividend_yield") is not None:
-            fd_lines.append(f"**배당수익률**: {fd['dividend_yield'] * 100:.2f}%")
+            fd_lines.append(f"**배당수익률**: {fd['dividend_yield']:.2f}%")
         if fd_lines:
             embed.add_field(name="💼 펀더멘탈", value="\n".join(fd_lines), inline=True)
 

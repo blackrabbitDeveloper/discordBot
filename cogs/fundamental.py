@@ -203,7 +203,7 @@ class Fundamental(commands.Cog):
         if data["dividend_rate"]:
             embed.add_field(name="연간 배당금", value=_fmt_price(data["dividend_rate"]), inline=True)
         if data["dividend_yield"]:
-            embed.add_field(name="배당 수익률", value=f"{data['dividend_yield'] * 100:.2f}%", inline=True)
+            embed.add_field(name="배당 수익률", value=f"{data['dividend_yield']:.2f}%", inline=True)
         if data["payout_ratio"]:
             embed.add_field(name="배당 성향", value=f"{data['payout_ratio'] * 100:.1f}%", inline=True)
         if data["ex_date"]:

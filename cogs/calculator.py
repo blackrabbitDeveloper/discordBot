@@ -67,7 +67,7 @@ def _fetch_dividend_info(ticker: str) -> dict | None:
             "name": info.get("shortName", ticker),
             "price": price,
             "dividend_rate": div_rate or 0,
-            "dividend_yield": (div_yield or 0) * 100,
+            "dividend_yield": div_yield or 0,
             "payout_ratio": info.get("payoutRatio"),
             "currency": info.get("currency", "USD"),
         }

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 from datetime import datetime, timedelta, time, timezone
 from io import BytesIO
@@ -9,6 +10,8 @@ import requests
 import yfinance as yf
 from discord import app_commands
 from discord.ext import commands, tasks
+
+log = logging.getLogger(__name__)
 
 KST = timezone(timedelta(hours=9))
 
@@ -222,69 +225,72 @@ class AutoPost(commands.Cog):
     # --- 한국 장 마감 요약 (KST 16:00) ---
     @tasks.loop(time=[time(16, 0, tzinfo=KST)])
     async def kr_summary_task(self):
-        data = await asyncio.to_thread(_fetch_kr_summary)
-
-        embed = discord.Embed(
-            title="🇰🇷 한국 장 마감 요약",
-            color=discord.Color.blue(),
-            timestamp=datetime.now(KST),
-        )
-
-        # 지수
-        index_lines = []
-        for name, idx_data in [("코스피", data["kospi"]), ("코스닥", data["kosdaq"])]:
-            if idx_data:
-                icon = _naver_icon(idx_data["direction"])
-                sign = _naver_sign(idx_data["direction"])
-                index_lines.append(
-                    f"{icon} **{name}**: {idx_data['close']}"
-                    f" ({sign}{idx_data['change_pct']}%)"
-                    f"\n　고가 {idx_data['high']} / 저가 {idx_data['low']}"
-                )
-        if index_lines:
-            embed.add_field(name="📊 지수", value="\n".join(index_lines), inline=False)
-
-        # 환율
-        usdkrw = data["usdkrw"]
-        if usdkrw:
-            sign = "+" if usdkrw["change"] >= 0 else ""
-            embed.add_field(
-                name="💵 환율",
-                value=f"USD/KRW: {usdkrw['price']:,.2f} ({sign}{usdkrw['change_pct']:.2f}%)",
-                inline=False,
-            )
-
-        # 시가총액 상위
-        top_cap = data["top_market_cap"]
-        if top_cap:
-            lines = []
-            for s in top_cap:
-                icon = _naver_icon(s["direction"])
-                sign = _naver_sign(s["direction"])
-                lines.append(f"{icon} **{s['name']}**: {s['price']} ({sign}{s['change_pct']}%)")
-            embed.add_field(name="🏢 시가총액 상위", value="\n".join(lines), inline=False)
-
-        # 상승률 상위
-        gainers = data["top_gainers"]
-        if gainers:
-            lines = []
-            for s in gainers:
-                lines.append(f"🚀 **{s['name']}**: {s['price']} (+{s['change_pct']}%)")
-            embed.add_field(name="📈 상승률 상위", value="\n".join(lines), inline=False)
-
-        embed.set_footer(text="네이버 금융 · 자동 요약")
-
-        # 한국 시가총액 히트맵 첨부
         try:
-            from cogs.heatmap import generate_kr_heatmap
-            img_bytes = (await asyncio.to_thread(generate_kr_heatmap)).read()
-            embed.set_image(url="attachment://kr_heatmap.png")
-            await self._send_to_channels(
-                "market_summary", embed,
-                file_factory=lambda: discord.File(BytesIO(img_bytes), filename="kr_heatmap.png"),
+            data = await asyncio.to_thread(_fetch_kr_summary)
+
+            embed = discord.Embed(
+                title="🇰🇷 한국 장 마감 요약",
+                color=discord.Color.blue(),
+                timestamp=datetime.now(KST),
             )
+
+            # 지수
+            index_lines = []
+            for name, idx_data in [("코스피", data["kospi"]), ("코스닥", data["kosdaq"])]:
+                if idx_data:
+                    icon = _naver_icon(idx_data["direction"])
+                    sign = _naver_sign(idx_data["direction"])
+                    index_lines.append(
+                        f"{icon} **{name}**: {idx_data['close']}"
+                        f" ({sign}{idx_data['change_pct']}%)"
+                        f"\n　고가 {idx_data['high']} / 저가 {idx_data['low']}"
+                    )
+            if index_lines:
+                embed.add_field(name="📊 지수", value="\n".join(index_lines), inline=False)
+
+            # 환율
+            usdkrw = data["usdkrw"]
+            if usdkrw:
+                sign = "+" if usdkrw["change"] >= 0 else ""
+                embed.add_field(
+                    name="💵 환율",
+                    value=f"USD/KRW: {usdkrw['price']:,.2f} ({sign}{usdkrw['change_pct']:.2f}%)",
+                    inline=False,
+                )
+
+            # 시가총액 상위
+            top_cap = data["top_market_cap"]
+            if top_cap:
+                lines = []
+                for s in top_cap:
+                    icon = _naver_icon(s["direction"])
+                    sign = _naver_sign(s["direction"])
+                    lines.append(f"{icon} **{s['name']}**: {s['price']} ({sign}{s['change_pct']}%)")
+                embed.add_field(name="🏢 시가총액 상위", value="\n".join(lines), inline=False)
+
+            # 상승률 상위
+            gainers = data["top_gainers"]
+            if gainers:
+                lines = []
+                for s in gainers:
+                    lines.append(f"🚀 **{s['name']}**: {s['price']} (+{s['change_pct']}%)")
+                embed.add_field(name="📈 상승률 상위", value="\n".join(lines), inline=False)
+
+            embed.set_footer(text="네이버 금융 · 자동 요약")
+
+            # 한국 시가총액 히트맵 첨부
+            try:
+                from cogs.heatmap import generate_kr_heatmap
+                img_bytes = (await asyncio.to_thread(generate_kr_heatmap)).read()
+                embed.set_image(url="attachment://kr_heatmap.png")
+                await self._send_to_channels(
+                    "market_summary", embed,
+                    file_factory=lambda: discord.File(BytesIO(img_bytes), filename="kr_heatmap.png"),
+                )
+            except Exception:
+                await self._send_to_channels("market_summary", embed)
         except Exception:
-            await self._send_to_channels("market_summary", embed)
+            log.exception("[AutoPost] KR summary failed")
 
     @kr_summary_task.before_loop
     async def before_kr_summary(self):
@@ -293,40 +299,43 @@ class AutoPost(commands.Cog):
     # --- 미국 장 마감 요약 (KST 06:00) ---
     @tasks.loop(time=[time(6, 0, tzinfo=KST)])
     async def us_summary_task(self):
-        data = await asyncio.to_thread(_fetch_us_summary)
-
-        embed = discord.Embed(
-            title="🇺🇸 미국 장 마감 요약",
-            color=discord.Color.dark_blue(),
-            timestamp=datetime.now(KST),
-        )
-
-        lines = []
-        for label, symbol in US_SUMMARY:
-            d = data.get((label, symbol))
-            if d is None:
-                lines.append(f"⚪ **{label}**: 데이터 없음")
-                continue
-            sign = "+" if d["change"] >= 0 else ""
-            icon = "🟢" if d["change"] >= 0 else "🔴"
-            lines.append(
-                f"{icon} **{label}**: {d['price']:,.2f} ({sign}{d['change_pct']:.2f}%)"
-            )
-
-        embed.add_field(name="시장 현황", value="\n".join(lines), inline=False)
-        embed.set_footer(text="Yahoo Finance · 자동 요약")
-
-        # 미국 섹터 히트맵 첨부
         try:
-            from cogs.heatmap import generate_us_heatmap
-            img_bytes = (await asyncio.to_thread(generate_us_heatmap)).read()
-            embed.set_image(url="attachment://us_heatmap.png")
-            await self._send_to_channels(
-                "market_summary", embed,
-                file_factory=lambda: discord.File(BytesIO(img_bytes), filename="us_heatmap.png"),
+            data = await asyncio.to_thread(_fetch_us_summary)
+
+            embed = discord.Embed(
+                title="🇺🇸 미국 장 마감 요약",
+                color=discord.Color.dark_blue(),
+                timestamp=datetime.now(KST),
             )
+
+            lines = []
+            for label, symbol in US_SUMMARY:
+                d = data.get((label, symbol))
+                if d is None:
+                    lines.append(f"⚪ **{label}**: 데이터 없음")
+                    continue
+                sign = "+" if d["change"] >= 0 else ""
+                icon = "🟢" if d["change"] >= 0 else "🔴"
+                lines.append(
+                    f"{icon} **{label}**: {d['price']:,.2f} ({sign}{d['change_pct']:.2f}%)"
+                )
+
+            embed.add_field(name="시장 현황", value="\n".join(lines), inline=False)
+            embed.set_footer(text="Yahoo Finance · 자동 요약")
+
+            # 미국 섹터 히트맵 첨부
+            try:
+                from cogs.heatmap import generate_us_heatmap
+                img_bytes = (await asyncio.to_thread(generate_us_heatmap)).read()
+                embed.set_image(url="attachment://us_heatmap.png")
+                await self._send_to_channels(
+                    "market_summary", embed,
+                    file_factory=lambda: discord.File(BytesIO(img_bytes), filename="us_heatmap.png"),
+                )
+            except Exception:
+                await self._send_to_channels("market_summary", embed)
         except Exception:
-            await self._send_to_channels("market_summary", embed)
+            log.exception("[AutoPost] US summary failed")
 
     @us_summary_task.before_loop
     async def before_us_summary(self):
@@ -351,10 +360,10 @@ class AutoPost(commands.Cog):
             naver = await asyncio.to_thread(_fetch_naver_index, market)
             if naver is None:
                 continue
-            pct = float(naver["change_pct"])
+            pct = float(str(naver["change_pct"]).replace(",", ""))
             if naver["direction"] in ("FALLING", "LOWER_LIMIT"):
                 pct = -abs(pct)
-            data = {"price": float(naver["close"]), "change_pct": pct}
+            data = {"price": float(str(naver["close"]).replace(",", "")), "change_pct": pct}
             await self._check_alert(name, market, data)
 
     async def _check_alert(self, name: str, key: str, data: dict | None):
