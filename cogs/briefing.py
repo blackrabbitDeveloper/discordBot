@@ -104,11 +104,18 @@ def _generate_briefing(market_data: dict, news: list[str], market_type: str) -> 
         client = genai.Client(api_key=api_key)
 
         market_label = "한국" if market_type == "kr" else "미국"
+
+        # US summary uses tuple keys — convert to serializable dict
+        serializable = {}
+        for k, v in market_data.items():
+            key = f"{k[0]} ({k[1]})" if isinstance(k, tuple) else str(k)
+            serializable[key] = v
+
         user_prompt = (
             f"## {market_label} 시장 데이터\n"
-            f"```json\n{json.dumps(market_data, ensure_ascii=False, indent=2)}\n```\n\n"
+            f"```json\n{json.dumps(serializable, ensure_ascii=False, indent=2, default=str)}\n```\n\n"
             f"## 오늘의 주요 뉴스\n"
-            + "\n".join(f"- {h}" for h in news)
+            + ("\n".join(f"- {h}" for h in news) if news else "뉴스 데이터 없음")
         )
 
         response = client.models.generate_content(
