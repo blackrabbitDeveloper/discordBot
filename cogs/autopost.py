@@ -4,6 +4,7 @@ import logging
 import os
 from datetime import datetime, timedelta, time, timezone
 from io import BytesIO
+from zoneinfo import ZoneInfo
 
 import discord
 import holidays
@@ -15,7 +16,7 @@ from discord.ext import commands, tasks
 log = logging.getLogger(__name__)
 
 KST = timezone(timedelta(hours=9))
-EST = timezone(timedelta(hours=-5))
+US_EASTERN = ZoneInfo("America/New_York")  # EST/EDT 자동 전환
 
 # 한국·미국 공휴일 캘린더 (매년 자동 갱신)
 _KR_HOLIDAYS = holidays.KR(years=range(2024, 2030))
@@ -36,7 +37,7 @@ def _is_us_market_open() -> bool:
     미국 장 마감 요약은 KST 06:00에 실행되므로, 해당 시점의
     미국 동부 날짜(전날)가 거래일인지 확인한다.
     """
-    us_date = datetime.now(EST).date()
+    us_date = datetime.now(US_EASTERN).date()
     if us_date.weekday() >= 5:
         return False
     return us_date not in _US_HOLIDAYS
@@ -373,7 +374,7 @@ class AutoPost(commands.Cog):
     async def before_us_summary(self):
         await self.bot.wait_until_ready()
 
-    # --- 급등/급락 알림 (5분마다) ---
+    # --- 급등/급락 알림 (5분마다, 장중에만) ---
     @tasks.loop(minutes=5)
     async def price_alert_task(self):
         # 날짜 변경 시 알림 상태 초기화
@@ -382,21 +383,28 @@ class AutoPost(commands.Cog):
             self._last_alert.clear()
             self._last_alert_date = today
 
-        # 미국 지수 — Yahoo Finance
-        for name, symbol in WATCH_INDICES_US:
-            quote = await asyncio.to_thread(_fetch_quote, symbol)
-            await self._check_alert(name, symbol, quote)
+        now_kst = datetime.now(KST)
+        kst_hour_min = (now_kst.hour, now_kst.minute)
 
-        # 한국 지수 — 네이버 금융 (정확한 변동률)
-        for name, market in WATCH_INDICES_KR:
-            naver = await asyncio.to_thread(_fetch_naver_index, market)
-            if naver is None:
-                continue
-            pct = float(str(naver["change_pct"]).replace(",", ""))
-            if naver["direction"] in ("FALLING", "LOWER_LIMIT"):
-                pct = -abs(pct)
-            data = {"price": float(str(naver["close"]).replace(",", "")), "change_pct": pct}
-            await self._check_alert(name, market, data)
+        # 한국 지수 — 장중(09:00~15:30) + 개장일만
+        if _is_kr_market_open() and (9, 0) <= kst_hour_min <= (15, 30):
+            for name, market in WATCH_INDICES_KR:
+                naver = await asyncio.to_thread(_fetch_naver_index, market)
+                if naver is None:
+                    continue
+                pct = float(str(naver["change_pct"]).replace(",", ""))
+                if naver["direction"] in ("FALLING", "LOWER_LIMIT"):
+                    pct = -abs(pct)
+                data = {"price": float(str(naver["close"]).replace(",", "")), "change_pct": pct}
+                await self._check_alert(name, market, data)
+
+        # 미국 지수 — 장중(ET 09:30~16:00) + 개장일만
+        now_et = datetime.now(US_EASTERN)
+        et_hour_min = (now_et.hour, now_et.minute)
+        if _is_us_market_open() and (9, 30) <= et_hour_min <= (16, 0):
+            for name, symbol in WATCH_INDICES_US:
+                quote = await asyncio.to_thread(_fetch_quote, symbol)
+                await self._check_alert(name, symbol, quote)
 
     async def _check_alert(self, name: str, key: str, data: dict | None):
         if data is None:
