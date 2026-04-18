@@ -9,7 +9,10 @@ import discord
 import requests
 from discord.ext import commands, tasks
 
-from cogs.autopost import _fetch_kr_summary, _fetch_us_summary, _get_channel_id
+from cogs.autopost import (
+    _fetch_kr_summary, _fetch_us_summary, _get_channel_id,
+    _is_kr_market_open, _is_us_market_open,
+)
 
 log = logging.getLogger(__name__)
 
@@ -84,14 +87,20 @@ _SYSTEM_PROMPT = """너는 투자 커뮤니티의 시황 분석 애널리스트�
 4. 내일 주목할 포인트
 
 규칙:
+- 브리핑 제목에 제공된 날짜를 반드시 포함
 - 사실 기반, 추측 최소화
 - 한국어, 존댓말
 - 4000자 이내
 - 마크다운 볼드(**) 활용하여 핵심 수치/키워드 강조"""
 
 
+_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
+_MAX_RETRIES = 3
+_RETRY_DELAY = 30  # seconds
+
+
 def _generate_briefing(market_data: dict, news: list[str], market_type: str) -> str | None:
-    """Gemini 2.5 Flash를 사용하여 시황 브리핑을 생성한다."""
+    """Gemini를 사용하여 시황 브리핑을 생성한다. 503 시 재시도 + 폴백 모델."""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         log.warning("[Briefing] GEMINI_API_KEY not set, skipping briefing")
@@ -100,43 +109,64 @@ def _generate_briefing(market_data: dict, news: list[str], market_type: str) -> 
     try:
         from google import genai
         from google.genai import types
-
-        client = genai.Client(api_key=api_key)
-
-        market_label = "한국" if market_type == "kr" else "미국"
-
-        # US summary uses tuple keys — convert to serializable dict
-        serializable = {}
-        for k, v in market_data.items():
-            key = f"{k[0]} ({k[1]})" if isinstance(k, tuple) else str(k)
-            serializable[key] = v
-
-        user_prompt = (
-            f"## {market_label} 시장 데이터\n"
-            f"```json\n{json.dumps(serializable, ensure_ascii=False, indent=2, default=str)}\n```\n\n"
-            f"## 오늘의 주요 뉴스\n"
-            + ("\n".join(f"- {h}" for h in news) if news else "뉴스 데이터 없음")
-        )
-
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=_SYSTEM_PROMPT,
-                max_output_tokens=4096,
-                temperature=0.7,
-            ),
-        )
-
-        text = response.text
-        if not text or not text.strip():
-            log.warning("[Briefing] Gemini returned empty response")
-            return None
-        return text.strip()
-
-    except Exception:
-        log.warning("[Briefing] Gemini API call failed", exc_info=True)
+        from google.genai.errors import ServerError
+    except ImportError:
+        log.warning("[Briefing] google-genai not installed")
         return None
+
+    client = genai.Client(api_key=api_key)
+
+    market_label = "한국" if market_type == "kr" else "미국"
+
+    # US summary uses tuple keys — convert to serializable dict
+    serializable = {}
+    for k, v in market_data.items():
+        key = f"{k[0]} ({k[1]})" if isinstance(k, tuple) else str(k)
+        serializable[key] = v
+
+    _WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
+    now_kst = datetime.now(KST)
+    today_str = now_kst.strftime("%Y년 %m월 %d일") + f" ({_WEEKDAYS[now_kst.weekday()]})"
+    user_prompt = (
+        f"## 날짜: {today_str}\n\n"
+        f"## {market_label} 시장 데이터\n"
+        f"```json\n{json.dumps(serializable, ensure_ascii=False, indent=2, default=str)}\n```\n\n"
+        f"## 오늘의 주요 뉴스\n"
+        + ("\n".join(f"- {h}" for h in news) if news else "뉴스 데이터 없음")
+    )
+
+    config = types.GenerateContentConfig(
+        system_instruction=_SYSTEM_PROMPT,
+        max_output_tokens=8192,
+        temperature=0.7,
+    )
+
+    for model in _MODELS:
+        for attempt in range(1, _MAX_RETRIES + 1):
+            try:
+                response = client.models.generate_content(
+                    model=model, contents=user_prompt, config=config,
+                )
+                text = response.text
+                if text and text.strip():
+                    return text.strip()
+                log.warning("[Briefing] %s returned empty response", model)
+                break  # empty response — try next model
+            except ServerError as e:
+                log.warning(
+                    "[Briefing] %s attempt %d/%d failed: %s",
+                    model, attempt, _MAX_RETRIES, e,
+                )
+                if attempt < _MAX_RETRIES:
+                    import time as _time
+                    _time.sleep(_RETRY_DELAY)
+            except Exception:
+                log.warning("[Briefing] %s unexpected error", model, exc_info=True)
+                break  # non-retryable — try next model
+        log.warning("[Briefing] %s exhausted, trying next model", model)
+
+    log.error("[Briefing] All models failed")
+    return None
 
 
 # --- Cog ---
@@ -161,6 +191,9 @@ class Briefing(commands.Cog):
     # --- 한국 시장 시황 브리핑 (KST 16:05) ---
     @tasks.loop(time=[time(16, 5, tzinfo=KST)])
     async def kr_briefing_task(self):
+        if not _is_kr_market_open():
+            log.info("[Briefing] KR market closed today — skipping briefing")
+            return
         try:
             data, news = await asyncio.gather(
                 asyncio.to_thread(_fetch_kr_summary),
@@ -191,6 +224,9 @@ class Briefing(commands.Cog):
     # --- 미국 시장 시황 브리핑 (KST 06:05) ---
     @tasks.loop(time=[time(6, 5, tzinfo=KST)])
     async def us_briefing_task(self):
+        if not _is_us_market_open():
+            log.info("[Briefing] US market closed today — skipping briefing")
+            return
         try:
             data, news = await asyncio.gather(
                 asyncio.to_thread(_fetch_us_summary),

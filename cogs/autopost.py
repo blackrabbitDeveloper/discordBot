@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, time, timezone
 from io import BytesIO
 
 import discord
+import holidays
 import requests
 import yfinance as yf
 from discord import app_commands
@@ -14,6 +15,31 @@ from discord.ext import commands, tasks
 log = logging.getLogger(__name__)
 
 KST = timezone(timedelta(hours=9))
+EST = timezone(timedelta(hours=-5))
+
+# 한국·미국 공휴일 캘린더 (매년 자동 갱신)
+_KR_HOLIDAYS = holidays.KR(years=range(2024, 2030))
+_US_HOLIDAYS = holidays.NYSE(years=range(2024, 2030))
+
+
+def _is_kr_market_open() -> bool:
+    """오늘(KST)이 한국 장 개장일인지 확인 (평일 + 공휴일 아닌 날)."""
+    today = datetime.now(KST).date()
+    if today.weekday() >= 5:  # 토·일
+        return False
+    return today not in _KR_HOLIDAYS
+
+
+def _is_us_market_open() -> bool:
+    """어제(미국 동부시간)이 미국 장 개장일인지 확인.
+
+    미국 장 마감 요약은 KST 06:00에 실행되므로, 해당 시점의
+    미국 동부 날짜(전날)가 거래일인지 확인한다.
+    """
+    us_date = datetime.now(EST).date()
+    if us_date.weekday() >= 5:
+        return False
+    return us_date not in _US_HOLIDAYS
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "channels.json")
 
@@ -225,6 +251,9 @@ class AutoPost(commands.Cog):
     # --- 한국 장 마감 요약 (KST 16:00) ---
     @tasks.loop(time=[time(16, 0, tzinfo=KST)])
     async def kr_summary_task(self):
+        if not _is_kr_market_open():
+            log.info("[AutoPost] KR market closed today — skipping summary")
+            return
         try:
             data = await asyncio.to_thread(_fetch_kr_summary)
 
@@ -299,6 +328,9 @@ class AutoPost(commands.Cog):
     # --- 미국 장 마감 요약 (KST 06:00) ---
     @tasks.loop(time=[time(6, 0, tzinfo=KST)])
     async def us_summary_task(self):
+        if not _is_us_market_open():
+            log.info("[AutoPost] US market closed today — skipping summary")
+            return
         try:
             data = await asyncio.to_thread(_fetch_us_summary)
 
