@@ -94,7 +94,7 @@ _SYSTEM_PROMPT = """너는 투자 커뮤니티의 시황 분석 애널리스트�
 - 마크다운 볼드(**) 활용하여 핵심 수치/키워드 강조"""
 
 
-_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
+_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
 _MAX_RETRIES = 3
 _RETRY_DELAY = 30  # seconds
 
