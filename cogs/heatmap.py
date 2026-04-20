@@ -1,69 +1,24 @@
 import asyncio
-import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from io import BytesIO
 
 import discord
-import matplotlib
 import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
 import squarify
 import requests
 import yfinance as yf
 from discord import app_commands
 from discord.ext import commands
 
-matplotlib.use("Agg")
-
-KST = timezone(timedelta(hours=9))
-
-NAVER_HEADERS = {"User-Agent": "Mozilla/5.0"}
-
-# 미국 섹터 ETF (시가총액 가중치 근사)
-US_SECTORS = [
-    ("기술", "XLK", 30),
-    ("헬스케어", "XLV", 13),
-    ("금융", "XLF", 13),
-    ("소비재", "XLY", 10),
-    ("통신", "XLC", 9),
-    ("산업", "XLI", 8),
-    ("필수소비재", "XLP", 6),
-    ("에너지", "XLE", 4),
-    ("유틸리티", "XLU", 3),
-    ("부동산", "XLRE", 2),
-    ("소재", "XLB", 2),
-]
-
-
-# --- 한글 폰트 설정 (프로젝트 내장 폰트 우선) ---
-
-_FONT_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "data", "fonts", "NotoSansKR-Bold.ttf"
-)
-
-def _load_font():
-    """프로젝트 내장 폰트 → 시스템 폰트 → 기본 폰트 순으로 로드."""
-    if os.path.exists(_FONT_PATH):
-        fm.fontManager.addfont(_FONT_PATH)
-        font_name = fm.FontProperties(fname=_FONT_PATH).get_name()
-        plt.rcParams["font.family"] = font_name
-        return font_name
-    # 시스템 폰트 폴백
-    for name in ["Malgun Gothic", "NanumGothic", "AppleGothic"]:
-        if name in {f.name for f in fm.fontManager.ttflist}:
-            plt.rcParams["font.family"] = name
-            return name
-    return None
-
-_FONT_NAME = _load_font()
-plt.rcParams["axes.unicode_minus"] = False
+from cogs.utils.constants import KST, NAVER_HEADERS, SECTOR_ETFS
+from cogs.utils.chart import FONT_NAME  # noqa: F401 – triggers matplotlib setup
 
 
 # --- 데이터 fetching ---
 
 def _fetch_us_sector_data() -> list[dict]:
     results = []
-    for name, symbol, weight in US_SECTORS:
+    for name, symbol, weight in SECTOR_ETFS:
         try:
             t = yf.Ticker(symbol)
             fi = t.fast_info

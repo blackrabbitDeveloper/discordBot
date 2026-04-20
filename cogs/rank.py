@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 import discord
 import requests
@@ -7,19 +7,8 @@ import yfinance as yf
 from discord import app_commands
 from discord.ext import commands
 
-KST = timezone(timedelta(hours=9))
-NAVER_HEADERS = {"User-Agent": "Mozilla/5.0"}
-YAHOO_HEADERS = {"User-Agent": "Mozilla/5.0"}
-
-# 미국 대형주 후보 (시가총액 상위 가능성 높은 종목들)
-US_LARGE_CAPS = [
-    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B",
-    "JPM", "V", "UNH", "MA", "HD", "PG", "JNJ", "COST", "ABBV", "BAC",
-    "CRM", "MRK", "AVGO", "KO", "PEP", "TMO", "WMT", "CSCO", "ACN",
-    "MCD", "ABT", "LLY", "NEE", "LIN", "ADBE", "TXN", "PM", "NKE",
-    "ORCL", "NFLX", "AMD", "INTC", "DIS", "QCOM", "LOW", "GS", "MS",
-    "AXP", "CAT", "DE", "UPS", "PLTR",
-]
+from cogs.utils.constants import KST, NAVER_HEADERS, YAHOO_HEADERS, US_MAJOR_TICKERS
+from cogs.utils.formatters import fmt_market_cap, fmt_market_cap_kr, fmt_volume_kr, fmt_volume_us
 
 # --- 네이버 KR 데이터 ---
 
@@ -77,7 +66,7 @@ def _fetch_kr_ranking(criteria: str, count: int = 20) -> list[dict]:
 def _fetch_us_market_cap(count: int = 20) -> list[dict]:
     """yfinance로 미국 시가총액 상위 종목 조회."""
     results = []
-    for symbol in US_LARGE_CAPS:
+    for symbol in US_MAJOR_TICKERS:
         try:
             t = yf.Ticker(symbol)
             info = t.fast_info
@@ -137,42 +126,6 @@ def _fetch_us_movers(criteria: str, count: int = 20) -> list[dict]:
         return []
 
 
-# --- 포맷 유틸 ---
-
-def _format_cap(value: float) -> str:
-    if value >= 1e12:
-        return f"${value / 1e12:.2f}T"
-    elif value >= 1e9:
-        return f"${value / 1e9:.1f}B"
-    elif value >= 1e6:
-        return f"${value / 1e6:.0f}M"
-    return f"${value:,.0f}"
-
-
-def _format_kr_cap(value: int) -> str:
-    if value >= 1_0000_0000_0000:
-        return f"{value / 1_0000_0000_0000:.1f}조"
-    elif value >= 1_0000_0000:
-        return f"{value / 1_0000_0000:.0f}억"
-    return f"{value:,}원"
-
-
-def _format_volume(value: int) -> str:
-    if value >= 1_0000_0000:
-        return f"{value / 1_0000_0000:.1f}억주"
-    elif value >= 1_0000:
-        return f"{value / 1_0000:.0f}만주"
-    return f"{value:,}주"
-
-
-def _format_us_volume(value: int) -> str:
-    if value >= 1e9:
-        return f"{value / 1e9:.1f}B"
-    elif value >= 1e6:
-        return f"{value / 1e6:.1f}M"
-    elif value >= 1e3:
-        return f"{value / 1e3:.0f}K"
-    return f"{value:,}"
 
 
 # --- Cog ---
@@ -252,18 +205,18 @@ class Rank(commands.Cog):
             if market.value == "us":
                 name = item.get("symbol", "")
                 if crit == "volume":
-                    extra = _format_us_volume(item.get("volume", 0))
+                    extra = fmt_volume_us(item.get("volume", 0))
                     lines.append(f"`{i:>2}.` {sign} **{name}** — {extra} ({pct})")
                 else:
-                    cap = _format_cap(item.get("market_cap", 0))
+                    cap = fmt_market_cap(item.get("market_cap", 0))
                     lines.append(f"`{i:>2}.` {sign} **{name}** — {cap} ({pct})")
             else:
                 name = item.get("name", "")
                 if crit == "volume":
-                    extra = _format_volume(item.get("volume", 0))
+                    extra = fmt_volume_kr(item.get("volume", 0))
                     lines.append(f"`{i:>2}.` {sign} **{name}** — {extra} ({pct})")
                 elif crit == "market_cap":
-                    cap = _format_kr_cap(item["market_cap"]) if item.get("market_cap") else ""
+                    cap = fmt_market_cap_kr(item["market_cap"]) if item.get("market_cap") else ""
                     lines.append(f"`{i:>2}.` {sign} **{name}** — {cap} ({pct})" if cap else f"`{i:>2}.` {sign} **{name}** ({pct})")
                 else:
                     lines.append(f"`{i:>2}.` {sign} **{name}** ({pct})")

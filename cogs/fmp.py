@@ -1,6 +1,6 @@
 import asyncio
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from xml.etree import ElementTree
 
 import discord
@@ -9,21 +9,9 @@ import yfinance as yf
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.fundamental import _resolve_ticker, _has_korean, _ticker_autocomplete
-
-KST = timezone(timedelta(hours=9))
-
-SEC_HEADERS = {"User-Agent": "DiscordBot admin@example.com", "Accept": "application/json"}
-
-# 실적 캘린더 — 주요 대형주 목록
-MAJOR_TICKERS = [
-    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B",
-    "JPM", "V", "UNH", "MA", "HD", "PG", "JNJ", "COST", "ABBV", "BAC",
-    "CRM", "MRK", "AVGO", "KO", "PEP", "TMO", "WMT", "CSCO", "ACN",
-    "MCD", "ABT", "DHR", "NEE", "LIN", "ADBE", "TXN", "PM", "NKE",
-    "ORCL", "NFLX", "AMD", "INTC", "DIS", "PYPL", "QCOM", "LOW",
-    "GS", "MS", "AXP", "CAT", "DE", "UPS",
-]
+from cogs.utils.constants import KST, US_MAJOR_TICKERS, SEC_HEADERS
+from cogs.utils.ticker import resolve_ticker, has_korean, ticker_autocomplete
+from cogs.utils.formatters import fmt_number
 
 
 # --- 실적 캘린더 (Yahoo Finance) ---
@@ -34,7 +22,7 @@ def _fetch_earnings_calendar() -> list[dict]:
     end = today + timedelta(days=30)
     results = []
 
-    for symbol in MAJOR_TICKERS:
+    for symbol in US_MAJOR_TICKERS:
         try:
             t = yf.Ticker(symbol)
             cal = t.calendar
@@ -216,14 +204,6 @@ def _parse_form4(cik: str, acc_no: str) -> list[dict]:
         return []
 
 
-def _fmt_number(n) -> str:
-    if n is None:
-        return "N/A"
-    if abs(n) >= 1e9:
-        return f"${n / 1e9:,.2f}B"
-    if abs(n) >= 1e6:
-        return f"${n / 1e6:,.1f}M"
-    return f"${n:,.0f}"
 
 
 # --- Cog ---
@@ -273,7 +253,7 @@ class MarketData(commands.Cog):
                 if item["eps_est"]:
                     parts.append(f"EPS est: ${item['eps_est']:.2f}")
                 if item["revenue_est"]:
-                    parts.append(f"매출 {_fmt_number(item['revenue_est'])}")
+                    parts.append(f"매출 {fmt_number(item['revenue_est'])}")
                 lines.append(" · ".join(parts))
             if len(items) > 10:
                 lines.append(f"... 외 {len(items) - 10}개")
@@ -295,11 +275,11 @@ class MarketData(commands.Cog):
         name="insider", description="종목의 내부자(임원) 거래 내역 (SEC EDGAR)"
     )
     @app_commands.describe(ticker="종목 코드 (예: AAPL)")
-    @app_commands.autocomplete(ticker=_ticker_autocomplete)
+    @app_commands.autocomplete(ticker=ticker_autocomplete)
     async def insider(self, interaction: discord.Interaction, ticker: str):
         await interaction.response.defer(ephemeral=True)
 
-        resolved = _resolve_ticker(ticker) if _has_korean(ticker) else ticker.upper()
+        resolved = resolve_ticker(ticker) if has_korean(ticker) else ticker.upper()
         if resolved is None:
             await interaction.followup.send(
                 f"`{ticker}` 종목을 찾을 수 없습니다.", ephemeral=True

@@ -1,12 +1,12 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 import discord
 import yfinance as yf
 from discord import app_commands
 from discord.ext import commands
 
-KST = timezone(timedelta(hours=9))
+from cogs.utils.constants import KST
 
 PAIRS = [
     ("🇺🇸 USD/KRW", "USDKRW=X", "달러/원"),

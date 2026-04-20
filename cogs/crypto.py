@@ -1,12 +1,13 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 import discord
 import yfinance as yf
 from discord import app_commands
 from discord.ext import commands
 
-KST = timezone(timedelta(hours=9))
+from cogs.utils.constants import KST
+from cogs.utils.formatters import fmt_number
 
 CRYPTOS = [
     ("₿ 비트코인", "BTC-USD"),
@@ -28,18 +29,6 @@ def _fmt_price(n: float | None) -> str:
     if n >= 1:
         return f"${n:.4f}"
     return f"${n:.6f}"
-
-
-def _fmt_number(n: float | None) -> str:
-    if n is None:
-        return "N/A"
-    if abs(n) >= 1e12:
-        return f"${n / 1e12:,.2f}T"
-    if abs(n) >= 1e9:
-        return f"${n / 1e9:,.2f}B"
-    if abs(n) >= 1e6:
-        return f"${n / 1e6:,.1f}M"
-    return f"${n:,.0f}"
 
 
 def _fetch_crypto(symbol: str) -> dict | None:
@@ -105,8 +94,8 @@ class Crypto(commands.Cog):
         # BTC 상세 정보
         btc = data.get("BTC-USD")
         if btc:
-            embed.add_field(name="₿ BTC 시총", value=_fmt_number(btc["market_cap"]), inline=True)
-            embed.add_field(name="₿ BTC 24h 거래량", value=_fmt_number(btc["volume_24h"]), inline=True)
+            embed.add_field(name="₿ BTC 시총", value=fmt_number(btc["market_cap"]), inline=True)
+            embed.add_field(name="₿ BTC 24h 거래량", value=fmt_number(btc["volume_24h"]), inline=True)
 
         embed.set_footer(text="Yahoo Finance · 실시간 데이터와 차이가 있을 수 있습니다")
         await interaction.followup.send(embed=embed, ephemeral=True)
@@ -140,8 +129,8 @@ class Crypto(commands.Cog):
             value=f"{sign}{data['change_pct']:.2f}%",
             inline=True,
         )
-        embed.add_field(name="시가총액", value=_fmt_number(data["market_cap"]), inline=True)
-        embed.add_field(name="24h 거래량", value=_fmt_number(data["volume_24h"]), inline=True)
+        embed.add_field(name="시가총액", value=fmt_number(data["market_cap"]), inline=True)
+        embed.add_field(name="24h 거래량", value=fmt_number(data["volume_24h"]), inline=True)
         embed.set_footer(text="Yahoo Finance")
 
         await interaction.followup.send(embed=embed, ephemeral=True)

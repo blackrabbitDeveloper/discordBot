@@ -1,7 +1,5 @@
 import asyncio
-import os
-import csv
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from xml.etree import ElementTree
 
 import discord
@@ -9,42 +7,18 @@ import requests
 from discord import app_commands
 from discord.ext import commands
 
-KST = timezone(timedelta(hours=9))
-
-_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-
-# KRX 종목 캐시 (한글 → 종목명 변환용)
-_krx_cache: list[dict] | None = None
-
-
-def _load_krx() -> list[dict]:
-    global _krx_cache
-    if _krx_cache is not None:
-        return _krx_cache
-    stocks = []
-    csv_path = os.path.join(_DATA_DIR, "krx_stocks.csv")
-    try:
-        with open(csv_path, encoding="utf-8") as f:
-            for row in csv.DictReader(f):
-                stocks.append({"name": row["name"], "symbol": row["symbol"]})
-    except FileNotFoundError:
-        pass
-    _krx_cache = stocks
-    return stocks
-
-
-def _has_korean(text: str) -> bool:
-    return any("\uac00" <= c <= "\ud7a3" for c in text)
+from cogs.utils.constants import KST
+from cogs.utils.ticker import has_korean, load_krx
 
 
 def _resolve_name(query: str) -> str:
     """티커가 입력되면 회사명으로 변환 (뉴스 검색용)."""
     query = query.strip()
-    if _has_korean(query):
+    if has_korean(query):
         return query
     # 티커로 KRX에서 이름 찾기
     upper = query.upper().replace(".KS", "").replace(".KQ", "")
-    stocks = _load_krx()
+    stocks = load_krx()
     for s in stocks:
         code = s["symbol"].split(".")[0]
         if code == upper:
@@ -98,8 +72,8 @@ async def _news_autocomplete(
 ) -> list[app_commands.Choice[str]]:
     if len(current) < 1:
         return []
-    if _has_korean(current):
-        stocks = _load_krx()
+    if has_korean(current):
+        stocks = load_krx()
         matches = [s for s in stocks if current in s["name"]][:10]
         return [
             app_commands.Choice(name=f"{s['name']} ({s['symbol']})", value=s["name"])

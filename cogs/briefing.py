@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timedelta, time, timezone
+from datetime import datetime, timedelta, time
 from xml.etree import ElementTree
 
 import discord
@@ -10,15 +10,13 @@ import requests
 from discord.ext import commands, tasks
 
 from cogs.autopost import (
-    _fetch_kr_summary, _fetch_us_summary, _get_channel_id,
+    _fetch_kr_summary, _fetch_us_summary,
     _is_kr_market_open, _is_us_market_open,
 )
+from cogs.utils.config import get_channel_id
+from cogs.utils.constants import KST, NAVER_HEADERS
 
 log = logging.getLogger(__name__)
-
-KST = timezone(timedelta(hours=9))
-
-NAVER_HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 
 # --- News fetching ---
@@ -257,7 +255,7 @@ class Briefing(commands.Cog):
     # --- Helper ---
     async def _send_to_channels(self, embed: discord.Embed):
         for guild in self.bot.guilds:
-            ch_id = _get_channel_id(guild.id, "market_summary")
+            ch_id = get_channel_id(guild.id, "market_summary")
             if ch_id:
                 channel = guild.get_channel(ch_id)
                 if channel:

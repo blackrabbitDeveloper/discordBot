@@ -1,94 +1,14 @@
 import asyncio
-import os
-import csv
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 import discord
 import yfinance as yf
 from discord import app_commands
 from discord.ext import commands
 
-KST = timezone(timedelta(hours=9))
-
-_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-_krx_cache: list[dict] | None = None
-
-
-def _load_krx() -> list[dict]:
-    global _krx_cache
-    if _krx_cache is not None:
-        return _krx_cache
-    stocks = []
-    csv_path = os.path.join(_DATA_DIR, "krx_stocks.csv")
-    try:
-        with open(csv_path, encoding="utf-8") as f:
-            for row in csv.DictReader(f):
-                stocks.append({"name": row["name"], "symbol": row["symbol"]})
-    except FileNotFoundError:
-        pass
-    _krx_cache = stocks
-    return stocks
-
-
-def _has_korean(text: str) -> bool:
-    return any("\uac00" <= c <= "\ud7a3" for c in text)
-
-
-def _resolve_ticker(query: str) -> str | None:
-    query = query.strip()
-    if _has_korean(query):
-        stocks = _load_krx()
-        for s in stocks:
-            if query in s["name"]:
-                return s["symbol"]
-        return None
-    upper = query.upper()
-    if upper.replace(".", "").replace("-", "").isalnum():
-        t = yf.Ticker(upper)
-        if t.info.get("regularMarketPrice") is not None:
-            return upper
-    return None
-
-
-async def _ticker_autocomplete(
-    interaction: discord.Interaction, current: str
-) -> list[app_commands.Choice[str]]:
-    if len(current) < 1:
-        return []
-    if _has_korean(current):
-        stocks = _load_krx()
-        matches = [s for s in stocks if current in s["name"]][:10]
-        return [
-            app_commands.Choice(name=f"{s['name']} ({s['symbol']})", value=s["symbol"])
-            for s in matches
-        ]
-    return []
-
-
-def _fmt_price(n, decimals=2) -> str:
-    if n is None:
-        return "N/A"
-    return f"{n:,.{decimals}f}"
-
-
-def _fmt_number(n) -> str:
-    if n is None:
-        return "N/A"
-    if abs(n) >= 1e12:
-        return f"${n / 1e12:,.2f}T"
-    if abs(n) >= 1e9:
-        return f"${n / 1e9:,.2f}B"
-    if abs(n) >= 1e6:
-        return f"${n / 1e6:,.1f}M"
-    return f"${n:,.0f}"
-
-
-def _fmt_date(d) -> str:
-    if d is None:
-        return "N/A"
-    if isinstance(d, datetime):
-        return d.strftime("%Y-%m-%d")
-    return str(d)
+from cogs.utils.constants import KST, SECTOR_ETFS
+from cogs.utils.formatters import fmt_price, fmt_number, fmt_date
+from cogs.utils.ticker import has_korean, resolve_ticker, ticker_autocomplete
 
 
 def _fetch_dividend(ticker: str) -> dict | None:
@@ -141,24 +61,10 @@ def _fetch_earnings(ticker: str) -> dict | None:
 
 # --- 섹터 ---
 
-SECTOR_ETFS = [
-    ("기술", "XLK"),
-    ("헬스케어", "XLV"),
-    ("금융", "XLF"),
-    ("소비재", "XLY"),
-    ("산업", "XLI"),
-    ("통신", "XLC"),
-    ("에너지", "XLE"),
-    ("필수소비재", "XLP"),
-    ("유틸리티", "XLU"),
-    ("부동산", "XLRE"),
-    ("소재", "XLB"),
-]
-
 
 def _fetch_sector_performance() -> list[dict]:
     results = []
-    for name, symbol in SECTOR_ETFS:
+    for name, symbol, _weight in SECTOR_ETFS:
         try:
             t = yf.Ticker(symbol)
             info = t.info
@@ -180,11 +86,11 @@ class Fundamental(commands.Cog):
     @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="dividend", description="종목의 배당 정보를 조회합니다")
     @app_commands.describe(ticker="종목코드 또는 회사명")
-    @app_commands.autocomplete(ticker=_ticker_autocomplete)
+    @app_commands.autocomplete(ticker=ticker_autocomplete)
     async def dividend(self, interaction: discord.Interaction, ticker: str):
         await interaction.response.defer(ephemeral=True)
 
-        resolved = _resolve_ticker(ticker) if _has_korean(ticker) else ticker.upper()
+        resolved = resolve_ticker(ticker) if has_korean(ticker) else ticker.upper()
         if resolved is None:
             await interaction.followup.send(f"`{ticker}` 종목을 찾을 수 없습니다.", ephemeral=True)
             return
@@ -201,7 +107,7 @@ class Fundamental(commands.Cog):
         )
 
         if data["dividend_rate"]:
-            embed.add_field(name="연간 배당금", value=_fmt_price(data["dividend_rate"]), inline=True)
+            embed.add_field(name="연간 배당금", value=fmt_price(data["dividend_rate"]), inline=True)
         if data["dividend_yield"]:
             embed.add_field(name="배당 수익률", value=f"{data['dividend_yield']:.2f}%", inline=True)
         if data["payout_ratio"]:
@@ -210,7 +116,7 @@ class Fundamental(commands.Cog):
             ex_dt = datetime.fromtimestamp(data["ex_date"], tz=KST)
             embed.add_field(name="배당락일", value=ex_dt.strftime("%Y-%m-%d"), inline=True)
         if data["trailing_rate"]:
-            embed.add_field(name="지난 12개월 배당", value=_fmt_price(data["trailing_rate"]), inline=True)
+            embed.add_field(name="지난 12개월 배당", value=fmt_price(data["trailing_rate"]), inline=True)
         if data["five_year_avg_yield"]:
             embed.add_field(name="5년 평균 수익률", value=f"{data['five_year_avg_yield']:.2f}%", inline=True)
 
@@ -223,11 +129,11 @@ class Fundamental(commands.Cog):
     @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="earnings", description="종목의 실적 발표 일정과 추정치를 조회합니다")
     @app_commands.describe(ticker="종목코드 또는 회사명")
-    @app_commands.autocomplete(ticker=_ticker_autocomplete)
+    @app_commands.autocomplete(ticker=ticker_autocomplete)
     async def earnings(self, interaction: discord.Interaction, ticker: str):
         await interaction.response.defer(ephemeral=True)
 
-        resolved = _resolve_ticker(ticker) if _has_korean(ticker) else ticker.upper()
+        resolved = resolve_ticker(ticker) if has_korean(ticker) else ticker.upper()
         if resolved is None:
             await interaction.followup.send(f"`{ticker}` 종목을 찾을 수 없습니다.", ephemeral=True)
             return
@@ -246,7 +152,7 @@ class Fundamental(commands.Cog):
         # 실적 발표일
         dates = data.get("earnings_date")
         if dates:
-            date_str = " ~ ".join(_fmt_date(d) for d in dates)
+            date_str = " ~ ".join(fmt_date(d) for d in dates)
             embed.add_field(name="실적 발표일", value=date_str, inline=False)
 
         # EPS 추정
@@ -265,9 +171,9 @@ class Fundamental(commands.Cog):
         # 매출 추정
         rev_lines = []
         if data["revenue_avg"]:
-            rev_lines.append(f"**컨센서스**: {_fmt_number(data['revenue_avg'])}")
+            rev_lines.append(f"**컨센서스**: {fmt_number(data['revenue_avg'])}")
         if data["revenue_high"] and data["revenue_low"]:
-            rev_lines.append(f"**범위**: {_fmt_number(data['revenue_low'])} ~ {_fmt_number(data['revenue_high'])}")
+            rev_lines.append(f"**범위**: {fmt_number(data['revenue_low'])} ~ {fmt_number(data['revenue_high'])}")
         if rev_lines:
             embed.add_field(name="💵 매출", value="\n".join(rev_lines), inline=True)
 
@@ -283,9 +189,9 @@ class Fundamental(commands.Cog):
         # 배당 일정
         div_lines = []
         if data["ex_dividend_date"]:
-            div_lines.append(f"**배당락일**: {_fmt_date(data['ex_dividend_date'])}")
+            div_lines.append(f"**배당락일**: {fmt_date(data['ex_dividend_date'])}")
         if data["dividend_date"]:
-            div_lines.append(f"**배당 지급일**: {_fmt_date(data['dividend_date'])}")
+            div_lines.append(f"**배당 지급일**: {fmt_date(data['dividend_date'])}")
         if div_lines:
             embed.add_field(name="💰 배당 일정", value="\n".join(div_lines), inline=False)
 

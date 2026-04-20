@@ -1,14 +1,13 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import discord
 import yfinance as yf
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.fundamental import _resolve_ticker, _has_korean, _ticker_autocomplete
-
-KST = timezone(timedelta(hours=9))
+from cogs.utils.constants import KST
+from cogs.utils.ticker import resolve_ticker, has_korean, ticker_autocomplete
 
 
 def _fmt_wan(n: float) -> str:
@@ -151,7 +150,7 @@ class Calculator(commands.Cog):
         ticker="종목코드 또는 회사명",
         investment="투자금액 (해당 종목 통화 기준)",
     )
-    @app_commands.autocomplete(ticker=_ticker_autocomplete)
+    @app_commands.autocomplete(ticker=ticker_autocomplete)
     async def dividend_calc(
         self,
         interaction: discord.Interaction,
@@ -164,7 +163,7 @@ class Calculator(commands.Cog):
             await interaction.followup.send("투자금액은 0보다 커야 합니다.", ephemeral=True)
             return
 
-        resolved = _resolve_ticker(ticker) if _has_korean(ticker) else ticker.upper()
+        resolved = resolve_ticker(ticker) if has_korean(ticker) else ticker.upper()
         if resolved is None:
             await interaction.followup.send(f"`{ticker}` 종목을 찾을 수 없습니다.", ephemeral=True)
             return

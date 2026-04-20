@@ -1,13 +1,13 @@
 import asyncio
 import json
 import os
-from datetime import datetime, timedelta, time, timezone, date
+from datetime import datetime, timedelta, time, date
 
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-KST = timezone(timedelta(hours=9))
+from cogs.utils.constants import KST
 
 _DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 _CALENDAR_PATH = os.path.join(_DATA_DIR, "economic_calendar.json")
@@ -174,10 +174,10 @@ class Calendar(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def _send_to_channels(self, embed: discord.Embed):
-        from cogs.autopost import _get_channel_id
+        from cogs.utils.config import get_channel_id
 
         for guild in self.bot.guilds:
-            ch_id = _get_channel_id(guild.id, "market_summary")
+            ch_id = get_channel_id(guild.id, "market_summary")
             if ch_id:
                 channel = guild.get_channel(ch_id)
                 if channel:

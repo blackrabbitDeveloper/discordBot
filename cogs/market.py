@@ -1,12 +1,13 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 import discord
 import yfinance as yf
 from discord import app_commands
 from discord.ext import commands
 
-KST = timezone(timedelta(hours=9))
+from cogs.utils.constants import KST
+from cogs.utils.formatters import fmt_price
 
 INDICES = [
     ("🇺🇸 S&P 500", "^GSPC"),
@@ -27,14 +28,6 @@ CURRENCIES = [
     ("💴 JPY/KRW", "JPYKRW=X"),
     ("💶 EUR/KRW", "EURKRW=X"),
 ]
-
-
-def _fmt_price(n: float | None, decimals: int = 2) -> str:
-    if n is None:
-        return "N/A"
-    if abs(n) >= 1000:
-        return f"{n:,.{decimals}f}"
-    return f"{n:.{decimals}f}"
 
 
 def _fetch_quote(symbol: str) -> dict | None:
@@ -70,7 +63,7 @@ def _format_line(label: str, data: dict | None, decimals: int = 2) -> str:
     sign = "+" if data["change"] >= 0 else ""
     icon = "🟢" if data["change"] >= 0 else "🔴"
     return (
-        f"{icon} **{label}**: {_fmt_price(data['price'], decimals)}"
+        f"{icon} **{label}**: {fmt_price(data['price'], decimals)}"
         f"  ({sign}{data['change_pct']:.2f}%)"
     )
 

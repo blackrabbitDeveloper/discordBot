@@ -1,49 +1,25 @@
 import asyncio
-import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from io import BytesIO
 
 import discord
-import matplotlib
 import matplotlib.pyplot as plt
 import mplfinance as mpf
-import requests
 import yfinance as yf
 from discord import app_commands
 from discord.ext import commands
 
-matplotlib.use("Agg")  # non-GUI backend
-
-KST = timezone(timedelta(hours=9))
-
-
-class ChartPeriod(discord.Enum):
-    one_month = "1mo"
-    three_months = "3mo"
-    six_months = "6mo"
-    one_year = "1y"
-
-
-PERIOD_LABELS = {
-    "1mo": "1개월",
-    "3mo": "3개월",
-    "6mo": "6개월",
-    "1y": "1년",
-}
-
-
-def _fmt_number(n: float | None) -> str:
-    if n is None:
-        return "N/A"
-    if abs(n) >= 1_0000_0000:
-        return f"{n / 1_0000_0000:,.1f}억"
-    if abs(n) >= 1_0000:
-        return f"{n / 1_0000:,.1f}만"
-    return f"{n:,.0f}"
-
-
-def _fmt_price(n: float | None) -> str:
-    return f"{n:,.0f}" if n is not None else "N/A"
+import cogs.utils.chart  # noqa: F401  # matplotlib setup
+from cogs.utils.chart import ChartPeriod
+from cogs.utils.constants import KST, PERIOD_LABELS
+from cogs.utils.formatters import fmt_market_cap, fmt_number_kr as _fmt_number, fmt_price
+from cogs.utils.ticker import (
+    has_korean,
+    resolve_ticker,
+    search_krx,
+    search_ticker,
+    ticker_autocomplete,
+)
 
 
 def _calc_rsi(series, period=14):
@@ -52,100 +28,6 @@ def _calc_rsi(series, period=14):
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
     rs = gain / loss
     return 100 - (100 / (1 + rs))
-
-
-_krx_cache: list[dict] | None = None
-
-_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-
-
-def _load_krx() -> list[dict]:
-    """로컬 CSV에서 KRX 종목 목록을 로딩합니다."""
-    global _krx_cache
-    if _krx_cache is not None:
-        return _krx_cache
-
-    import csv
-
-    stocks = []
-    csv_path = os.path.join(_DATA_DIR, "krx_stocks.csv")
-    try:
-        with open(csv_path, encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                stocks.append({"name": row["name"], "symbol": row["symbol"]})
-    except FileNotFoundError:
-        pass
-
-    _krx_cache = stocks
-    return stocks
-
-
-def _search_krx(query: str) -> list[dict]:
-    """한글 종목명으로 KRX 종목을 검색합니다."""
-    stocks = _load_krx()
-    return [s for s in stocks if query in s["name"]][:5]
-
-
-def _search_ticker(query: str) -> list[dict]:
-    """Yahoo Finance 검색 API로 종목을 찾습니다. 영어만 지원."""
-    try:
-        r = requests.get(
-            "https://query1.finance.yahoo.com/v1/finance/search",
-            params={"q": query, "quotesCount": 5, "newsCount": 0},
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=5,
-        )
-        if r.status_code != 200:
-            return []
-        return [
-            {"symbol": q["symbol"], "name": q.get("shortname", q["symbol"])}
-            for q in r.json().get("quotes", [])
-            if q.get("quoteType") == "EQUITY"
-        ]
-    except Exception:
-        return []
-
-
-def _has_korean(text: str) -> bool:
-    return any("\uac00" <= c <= "\ud7a3" for c in text)
-
-
-def _resolve_ticker(query: str) -> str | None:
-    """티커, 영문 회사명, 한글 회사명 모두 지원."""
-    query = query.strip()
-
-    # 한글이 포함되면 KRX 검색
-    if _has_korean(query):
-        results = _search_krx(query)
-        return results[0]["symbol"] if results else None
-
-    # 영문/숫자면 직접 조회 시도
-    upper = query.upper()
-    if upper.replace(".", "").replace("-", "").isalnum():
-        t = yf.Ticker(upper)
-        if t.info.get("regularMarketPrice") is not None:
-            return upper
-
-    # 직접 조회 실패 시 Yahoo 검색
-    results = _search_ticker(query)
-    return results[0]["symbol"] if results else None
-
-
-async def _ticker_autocomplete(
-    interaction: discord.Interaction, current: str
-) -> list[app_commands.Choice[str]]:
-    """ticker 파라미터 자동완성. 한글이면 KRX, 영어면 Yahoo 검색."""
-    if len(current) < 1:
-        return []
-    if _has_korean(current):
-        results = _search_krx(current)
-    else:
-        results = _search_ticker(current)
-    return [
-        app_commands.Choice(name=f"{r['name']} ({r['symbol']})", value=r["symbol"])
-        for r in results[:25]
-    ]
 
 
 class Stock(commands.Cog):
@@ -158,10 +40,10 @@ class Stock(commands.Cog):
     async def stock_search(self, interaction: discord.Interaction, query: str):
         await interaction.response.defer(ephemeral=True)
 
-        if _has_korean(query):
-            results = await asyncio.to_thread(_search_krx, query)
+        if has_korean(query):
+            results = await asyncio.to_thread(search_krx, query)
         else:
-            results = await asyncio.to_thread(_search_ticker, query)
+            results = await asyncio.to_thread(search_ticker, query)
 
         if not results:
             await interaction.followup.send(
@@ -179,11 +61,11 @@ class Stock(commands.Cog):
     @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="stock", description="종목의 현재 주가 정보를 조회합니다")
     @app_commands.describe(ticker="종목코드 또는 회사명 (예: AAPL, 삼성전자, 005930.KS)")
-    @app_commands.autocomplete(ticker=_ticker_autocomplete)
+    @app_commands.autocomplete(ticker=ticker_autocomplete)
     async def stock(self, interaction: discord.Interaction, ticker: str):
         await interaction.response.defer(ephemeral=True)
 
-        resolved = await asyncio.to_thread(_resolve_ticker, ticker)
+        resolved = await asyncio.to_thread(resolve_ticker, ticker)
         if resolved is None:
             await interaction.followup.send(
                 f"`{ticker}` 종목을 찾을 수 없습니다. `/stock-search`로 검색해보세요.",
@@ -204,19 +86,19 @@ class Stock(commands.Cog):
             timestamp=datetime.now(KST),
         )
         sign = "+" if info["change"] >= 0 else ""
-        embed.add_field(name="현재가", value=_fmt_price(info["price"]), inline=True)
+        embed.add_field(name="현재가", value=fmt_price(info["price"], 0), inline=True)
         embed.add_field(
             name="등락",
-            value=f"{sign}{_fmt_price(info['change'])} ({sign}{info['change_pct']:.2f}%)",
+            value=f"{sign}{fmt_price(info['change'], 0)} ({sign}{info['change_pct']:.2f}%)",
             inline=True,
         )
         embed.add_field(name="거래량", value=_fmt_number(info["volume"]), inline=True)
-        embed.add_field(name="시가", value=_fmt_price(info["open"]), inline=True)
-        embed.add_field(name="고가", value=_fmt_price(info["high"]), inline=True)
-        embed.add_field(name="저가", value=_fmt_price(info["low"]), inline=True)
+        embed.add_field(name="시가", value=fmt_price(info["open"], 0), inline=True)
+        embed.add_field(name="고가", value=fmt_price(info["high"], 0), inline=True)
+        embed.add_field(name="저가", value=fmt_price(info["low"], 0), inline=True)
         embed.add_field(name="시가총액", value=_fmt_number(info["market_cap"]), inline=True)
-        embed.add_field(name="52주 최고", value=_fmt_price(info["week52_high"]), inline=True)
-        embed.add_field(name="52주 최저", value=_fmt_price(info["week52_low"]), inline=True)
+        embed.add_field(name="52주 최고", value=fmt_price(info["week52_high"], 0), inline=True)
+        embed.add_field(name="52주 최저", value=fmt_price(info["week52_low"], 0), inline=True)
         embed.set_footer(text="Yahoo Finance")
 
         await interaction.followup.send(embed=embed, ephemeral=True)
@@ -227,7 +109,7 @@ class Stock(commands.Cog):
         ticker="종목코드 또는 회사명 (예: AAPL, 삼성전자, 005930.KS)",
         period="차트 기간",
     )
-    @app_commands.autocomplete(ticker=_ticker_autocomplete)
+    @app_commands.autocomplete(ticker=ticker_autocomplete)
     async def stock_chart(
         self,
         interaction: discord.Interaction,
@@ -236,7 +118,7 @@ class Stock(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True)
 
-        resolved = await asyncio.to_thread(_resolve_ticker, ticker)
+        resolved = await asyncio.to_thread(resolve_ticker, ticker)
         if resolved is None:
             await interaction.followup.send(
                 f"`{ticker}` 종목을 찾을 수 없습니다. `/stock-search`로 검색해보세요.",
@@ -260,11 +142,11 @@ class Stock(commands.Cog):
     @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="stock-analysis", description="종목의 기술적 분석 + 펀더멘탈을 제공합니다")
     @app_commands.describe(ticker="종목코드 또는 회사명 (예: AAPL, 삼성전자, 005930.KS)")
-    @app_commands.autocomplete(ticker=_ticker_autocomplete)
+    @app_commands.autocomplete(ticker=ticker_autocomplete)
     async def stock_analysis(self, interaction: discord.Interaction, ticker: str):
         await interaction.response.defer(ephemeral=True)
 
-        resolved = await asyncio.to_thread(_resolve_ticker, ticker)
+        resolved = await asyncio.to_thread(resolve_ticker, ticker)
         if resolved is None:
             await interaction.followup.send(
                 f"`{ticker}` 종목을 찾을 수 없습니다. `/stock-search`로 검색해보세요.",
@@ -281,7 +163,7 @@ class Stock(commands.Cog):
 
         embed = discord.Embed(
             title=f"📊 {result['name']} 기술적 분석",
-            description=f"현재가: **{_fmt_price(result['price'])}**",
+            description=f"현재가: **{fmt_price(result['price'], 0)}**",
             color=discord.Color.blue(),
             timestamp=datetime.now(KST),
         )
@@ -291,7 +173,7 @@ class Stock(commands.Cog):
         for label, val, curr in result["ma"]:
             if val is not None:
                 status = "🟢 위" if curr > val else "🔴 아래"
-                ma_lines.append(f"**{label}**: {_fmt_price(val)} ({status})")
+                ma_lines.append(f"**{label}**: {fmt_price(val, 0)} ({status})")
         embed.add_field(name="📈 이동평균선", value="\n".join(ma_lines) or "N/A", inline=False)
 
         # 골든/데드크로스 이벤트
@@ -330,9 +212,9 @@ class Stock(commands.Cog):
         bb = result["bb"]
         if bb:
             bb_text = (
-                f"상단: {_fmt_price(bb['upper'])}\n"
-                f"중심: {_fmt_price(bb['mid'])}\n"
-                f"하단: {_fmt_price(bb['lower'])}\n"
+                f"상단: {fmt_price(bb['upper'], 0)}\n"
+                f"중심: {fmt_price(bb['mid'], 0)}\n"
+                f"하단: {fmt_price(bb['lower'], 0)}\n"
                 f"{bb['position']}"
             )
             if bb["squeeze"]:
@@ -342,13 +224,13 @@ class Stock(commands.Cog):
         # 지지/저항선
         sr = result["support_resistance"]
         sr_text = (
-            f"**20일 저항**: {_fmt_price(sr['r1'])}\n"
-            f"**20일 지지**: {_fmt_price(sr['s1'])}"
+            f"**20일 저항**: {fmt_price(sr['r1'], 0)}\n"
+            f"**20일 지지**: {fmt_price(sr['s1'], 0)}"
         )
         if sr["r2"] is not None:
             sr_text += (
-                f"\n**60일 저항**: {_fmt_price(sr['r2'])}\n"
-                f"**60일 지지**: {_fmt_price(sr['s2'])}"
+                f"\n**60일 저항**: {fmt_price(sr['r2'], 0)}\n"
+                f"**60일 지지**: {fmt_price(sr['s2'], 0)}"
             )
         embed.add_field(name="🔒 지지/저항선", value=sr_text, inline=True)
 
@@ -380,13 +262,7 @@ class Stock(commands.Cog):
         # 시가총액
         mc = fd.get("market_cap")
         if mc:
-            if mc >= 1e12:
-                mc_str = f"${mc / 1e12:,.2f}T"
-            elif mc >= 1e9:
-                mc_str = f"${mc / 1e9:,.1f}B"
-            else:
-                mc_str = f"${mc / 1e6:,.0f}M"
-            embed.add_field(name="🏢 시가총액", value=mc_str, inline=True)
+            embed.add_field(name="🏢 시가총액", value=fmt_market_cap(mc), inline=True)
 
         # 종합 신호
         embed.add_field(name="🏁 종합 신호", value=result["signal"], inline=False)

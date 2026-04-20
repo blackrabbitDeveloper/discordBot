@@ -1,52 +1,19 @@
 import asyncio
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from io import BytesIO
 
 import discord
-import matplotlib
 import mplfinance as mpf
 import requests
 import yfinance as yf
 from discord import app_commands
 from discord.ext import commands
 
-matplotlib.use("Agg")
-
-KST = timezone(timedelta(hours=9))
-
-
-class ChartPeriod(discord.Enum):
-    one_month = "1mo"
-    three_months = "3mo"
-    six_months = "6mo"
-    one_year = "1y"
-
-
-PERIOD_LABELS = {
-    "1mo": "1개월",
-    "3mo": "3개월",
-    "6mo": "6개월",
-    "1y": "1년",
-}
-
-
-def _fmt_price(n: float | None) -> str:
-    return f"{n:,.0f}" if n is not None else "N/A"
-
-
-def _fmt_number(n: float | None) -> str:
-    if n is None:
-        return "N/A"
-    if abs(n) >= 1_0000_0000:
-        return f"{n / 1_0000_0000:,.1f}억"
-    if abs(n) >= 1_0000:
-        return f"{n / 1_0000:,.1f}만"
-    return f"{n:,.0f}"
-
-
-def _fmt_pct(n: float | None) -> str:
-    return f"{n:.2f}%" if n is not None else "N/A"
+import cogs.utils.chart  # noqa: F401
+from cogs.utils.chart import ChartPeriod
+from cogs.utils.constants import DATA_DIR, KST, PERIOD_LABELS
+from cogs.utils.formatters import fmt_number_kr, fmt_pct, fmt_price
 
 
 # --- ETF 검색 ---
@@ -72,7 +39,7 @@ def _search_etf_yahoo(query: str) -> list[dict]:
 
 _etf_cache: list[dict] | None = None
 
-_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+_DATA_DIR = DATA_DIR
 
 
 def _load_etf_list() -> list[dict]:
@@ -170,21 +137,21 @@ class ETF(commands.Cog):
             timestamp=datetime.now(KST),
         )
         sign = "+" if info["change"] >= 0 else ""
-        embed.add_field(name="현재가", value=_fmt_price(info["price"]), inline=True)
+        embed.add_field(name="현재가", value=fmt_price(info["price"], decimals=0), inline=True)
         embed.add_field(
             name="등락",
-            value=f"{sign}{_fmt_price(info['change'])} ({sign}{info['change_pct']:.2f}%)",
+            value=f"{sign}{fmt_price(info['change'], decimals=0)} ({sign}{info['change_pct']:.2f}%)",
             inline=True,
         )
-        embed.add_field(name="거래량", value=_fmt_number(info["volume"]), inline=True)
+        embed.add_field(name="거래량", value=fmt_number_kr(info["volume"]), inline=True)
         if info["expense_ratio"] is not None:
-            embed.add_field(name="운용보수", value=_fmt_pct(info["expense_ratio"]), inline=True)
+            embed.add_field(name="운용보수", value=fmt_pct(info["expense_ratio"]), inline=True)
         if info["total_assets"] is not None:
-            embed.add_field(name="순자산", value=_fmt_number(info["total_assets"]), inline=True)
+            embed.add_field(name="순자산", value=fmt_number_kr(info["total_assets"]), inline=True)
         if info["nav"] is not None:
-            embed.add_field(name="NAV", value=_fmt_price(info["nav"]), inline=True)
-        embed.add_field(name="52주 최고", value=_fmt_price(info["week52_high"]), inline=True)
-        embed.add_field(name="52주 최저", value=_fmt_price(info["week52_low"]), inline=True)
+            embed.add_field(name="NAV", value=fmt_price(info["nav"], decimals=0), inline=True)
+        embed.add_field(name="52주 최고", value=fmt_price(info["week52_high"], decimals=0), inline=True)
+        embed.add_field(name="52주 최저", value=fmt_price(info["week52_low"], decimals=0), inline=True)
         if info["category"]:
             embed.add_field(name="카테고리", value=info["category"], inline=True)
 

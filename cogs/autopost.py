@@ -1,8 +1,6 @@
 import asyncio
-import json
 import logging
-import os
-from datetime import datetime, timedelta, time, timezone
+from datetime import datetime, time
 from io import BytesIO
 from zoneinfo import ZoneInfo
 
@@ -13,9 +11,11 @@ import yfinance as yf
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from cogs.utils.config import get_channel_id, set_channel_id
+from cogs.utils.constants import KST, NAVER_HEADERS
+
 log = logging.getLogger(__name__)
 
-KST = timezone(timedelta(hours=9))
 US_EASTERN = ZoneInfo("America/New_York")  # EST/EDT 자동 전환
 
 # 한국·미국 공휴일 캘린더 (매년 자동 갱신)
@@ -41,10 +41,6 @@ def _is_us_market_open() -> bool:
     if us_date.weekday() >= 5:
         return False
     return us_date not in _US_HOLIDAYS
-
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "channels.json")
-
-NAVER_HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 # 감시할 지수 (미국)
 WATCH_INDICES_US = [
@@ -72,35 +68,6 @@ US_SUMMARY = [
 
 ALERT_THRESHOLD = 2.0
 
-
-# --- Config ---
-
-def _load_config() -> dict:
-    try:
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-
-
-def _save_config(config: dict):
-    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2)
-
-
-def _get_channel_id(guild_id: int, channel_type: str) -> int | None:
-    config = _load_config()
-    return config.get(str(guild_id), {}).get(channel_type)
-
-
-def _set_channel_id(guild_id: int, channel_type: str, channel_id: int):
-    config = _load_config()
-    guild_key = str(guild_id)
-    if guild_key not in config:
-        config[guild_key] = {}
-    config[guild_key][channel_type] = channel_id
-    _save_config(config)
 
 
 # --- Yahoo Finance ---
@@ -235,7 +202,7 @@ class AutoPost(commands.Cog):
         channel_type: ChannelType,
         channel: discord.TextChannel,
     ):
-        _set_channel_id(interaction.guild_id, channel_type.value, channel.id)
+        set_channel_id(interaction.guild_id, channel_type.value, channel.id)
         label = "장 마감 요약" if channel_type == ChannelType.장마감요약 else "급등/급락 알림"
         await interaction.response.send_message(
             f"✅ **{label}** 채널이 {channel.mention}으로 설정되었습니다.",
@@ -446,7 +413,7 @@ class AutoPost(commands.Cog):
         self, channel_type: str, embed: discord.Embed, *, file_factory=None,
     ):
         for guild in self.bot.guilds:
-            ch_id = _get_channel_id(guild.id, channel_type)
+            ch_id = get_channel_id(guild.id, channel_type)
             if ch_id:
                 channel = guild.get_channel(ch_id)
                 if channel:
