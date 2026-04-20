@@ -38,6 +38,7 @@ class Bot(commands.Bot):
         await self.load_extension("cogs.fmp")
         await self.load_extension("cogs.autopost")
         await self.load_extension("cogs.briefing")
+        await self.load_extension("cogs.rank")
         await self.tree.sync()
 
     async def on_ready(self):
