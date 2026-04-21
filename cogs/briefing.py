@@ -75,11 +75,27 @@ def _fetch_google_news(query: str = "stock market Wall Street", count: int = 10)
 
 # --- Gemini API ---
 
-_SYSTEM_PROMPT = """너는 투자 커뮤니티의 시황 분석 애널리스트다.
-주어진 시장 데이터와 뉴스를 바탕으로 한국어 시황 브리핑을 작성해라.
+_SYSTEM_PROMPT_KR = """너는 투자 커뮤니티의 시황 분석 애널리스트다.
+주어진 시장 데이터와 뉴스를 바탕으로 한국 증시 시황 브리핑을 작성해라.
 
 구조:
-1. 시장 요약 (지수 동향, 주요 변동)
+1. 시장 요약 (코스피/코스닥 지수 동향, 주요 변동)
+2. 주요 이슈 (뉴스 기반, 시장에 영향을 준 이벤트)
+3. 섹터/종목 분석 (눈에 띄는 움직임)
+4. 내일 주목할 포인트
+
+규칙:
+- 브리핑 제목에 제공된 날짜를 반드시 포함
+- 사실 기반, 추측 최소화
+- 한국어, 존댓말
+- 4000자 이내
+- 마크다운 볼드(**) 활용하여 핵심 수치/키워드 강조"""
+
+_SYSTEM_PROMPT_US = """너는 투자 커뮤니티의 시황 분석 애널리스트다.
+주어진 시장 데이터와 뉴스를 바탕으로 미국 증시 시황 브리핑을 작성해라.
+
+구조:
+1. 시장 요약 (S&P 500, 나스닥, 다우존스 지수 동향, 주요 변동)
 2. 주요 이슈 (뉴스 기반, 시장에 영향을 준 이벤트)
 3. 섹터/종목 분석 (눈에 띄는 움직임)
 4. 내일 주목할 포인트
@@ -133,8 +149,9 @@ def _generate_briefing(market_data: dict, news: list[str], market_type: str) -> 
         + ("\n".join(f"- {h}" for h in news) if news else "뉴스 데이터 없음")
     )
 
+    system_prompt = _SYSTEM_PROMPT_KR if market_type == "kr" else _SYSTEM_PROMPT_US
     config = types.GenerateContentConfig(
-        system_instruction=_SYSTEM_PROMPT,
+        system_instruction=system_prompt,
         max_output_tokens=8192,
         temperature=0.7,
     )
