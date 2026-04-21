@@ -67,6 +67,7 @@ US_SUMMARY = [
 ]
 
 ALERT_THRESHOLD = 2.0
+ALERT_STEP = 1.0  # 재알림 간격 (이전 알림 대비 1%p 이상 변동 시)
 
 
 
@@ -380,7 +381,7 @@ class AutoPost(commands.Cog):
         pct = data["change_pct"]
         last = self._last_alert.get(key)
 
-        if last is not None and abs(pct) <= abs(last):
+        if last is not None and abs(pct) < abs(last) + ALERT_STEP:
             return
 
         if abs(pct) >= ALERT_THRESHOLD:
