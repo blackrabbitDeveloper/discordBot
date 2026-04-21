@@ -258,14 +258,15 @@ def _render_heatmap(
 
         _shadow = [patheffects.withSimplePatchShadow(offset=(1.5, -1.5), shadow_rgbFace="black", alpha=0.6)]
         _fp = {"fontproperties": _BLACK_FONT} if _BLACK_FONT else {"fontweight": "bold"}
-        ax.text(x, y + 1, label, ha="center", va="center",
+        ax.text(x, y - 1, label, ha="center", va="center",
                 fontsize=name_size, color="white",
                 path_effects=_shadow, **_fp)
-        ax.text(x, y - h * 0.15, pct_text, ha="center", va="center",
+        ax.text(x, y + h * 0.15, pct_text, ha="center", va="center",
                 fontsize=pct_size, color="white",
                 path_effects=_shadow, **_fp)
 
     ax.set_title(title, fontsize=18, fontweight="bold", color="white", pad=15)
+    ax.invert_yaxis()  # 좌상단 = 1위 (시가총액/순위 순)
     ax.set_axis_off()
 
     buf = BytesIO()
