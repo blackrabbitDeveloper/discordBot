@@ -1,8 +1,12 @@
 import asyncio
+import logging
+import threading
 from datetime import datetime
 from io import BytesIO
 
 import os
+
+log = logging.getLogger(__name__)
 
 import discord
 import matplotlib.pyplot as plt
@@ -48,12 +52,14 @@ def _fetch_us_sector_data() -> list[dict]:
                     "weight": weight, "change_pct": change_pct,
                 })
         except Exception:
+            log.warning("[Heatmap] Failed to fetch US sector %s", symbol, exc_info=True)
             continue
     return results
 
 
 _sp500_cache: list[tuple[str, str]] = []
 _sp500_cache_time: float = 0
+_sp500_lock = threading.Lock()
 
 
 def _fetch_sp500_list() -> list[tuple[str, str]]:
@@ -61,8 +67,9 @@ def _fetch_sp500_list() -> list[tuple[str, str]]:
     import time as _time
     global _sp500_cache, _sp500_cache_time
 
-    if _sp500_cache and (_time.time() - _sp500_cache_time) < 86400:
-        return _sp500_cache
+    with _sp500_lock:
+        if _sp500_cache and (_time.time() - _sp500_cache_time) < 86400:
+            return _sp500_cache
 
     try:
         from io import StringIO
@@ -74,33 +81,39 @@ def _fetch_sp500_list() -> list[tuple[str, str]]:
             return _sp500_cache or []
         import pandas as pd
         df = pd.read_html(StringIO(r.text))[0]
-        _sp500_cache = [
+        result = [
             (sym.replace(".", "-"), name)
             for sym, name in zip(df["Symbol"], df["Security"])
         ]
-        _sp500_cache_time = _time.time()
-        return _sp500_cache
+        with _sp500_lock:
+            _sp500_cache = result
+            _sp500_cache_time = _time.time()
+        return result
     except Exception:
+        log.warning("[Heatmap] Failed to fetch S&P 500 list", exc_info=True)
         return _sp500_cache or []
 
 
 _mcap_cache: list[tuple[str, str, float]] = []  # [(symbol, name, marketCap), ...]
 _mcap_cache_time: float = 0
+_mcap_lock = threading.Lock()
 _MCAP_CACHE_TTL = 86400  # 24시간
 
 
 def _fetch_sp500_mcap_ranking(top_n: int = 100) -> list[tuple[str, str, float]]:
-    """S&P 500 시가총액 순위를 가져온다 (1시간 캐시)."""
+    """S&P 500 시가총액 순위를 가져온다 (24시간 캐시)."""
     import time as _time
     from concurrent.futures import ThreadPoolExecutor
     global _mcap_cache, _mcap_cache_time
 
-    if _mcap_cache and (_time.time() - _mcap_cache_time) < _MCAP_CACHE_TTL:
-        return _mcap_cache[:top_n]
+    with _mcap_lock:
+        if _mcap_cache and (_time.time() - _mcap_cache_time) < _MCAP_CACHE_TTL:
+            return _mcap_cache[:top_n]
 
     sp500 = _fetch_sp500_list()
     if not sp500:
-        return _mcap_cache[:top_n] if _mcap_cache else []
+        with _mcap_lock:
+            return _mcap_cache[:top_n] if _mcap_cache else []
 
     def _get_mcap(item: tuple[str, str]) -> tuple[str, str, float]:
         sym, name = item
@@ -108,6 +121,7 @@ def _fetch_sp500_mcap_ranking(top_n: int = 100) -> list[tuple[str, str, float]]:
             mc = yf.Ticker(sym).fast_info.get("marketCap") or 0
             return (sym, name, float(mc))
         except Exception:
+            log.warning("[Heatmap] Failed to fetch marketCap for %s", sym)
             return (sym, name, 0)
 
     with ThreadPoolExecutor(max_workers=20) as ex:
@@ -116,8 +130,9 @@ def _fetch_sp500_mcap_ranking(top_n: int = 100) -> list[tuple[str, str, float]]:
     valid = [(s, n, mc) for s, n, mc in results if mc > 0]
     valid.sort(key=lambda x: x[2], reverse=True)
 
-    _mcap_cache = valid
-    _mcap_cache_time = _time.time()
+    with _mcap_lock:
+        _mcap_cache = valid
+        _mcap_cache_time = _time.time()
     return valid[:top_n]
 
 
@@ -133,6 +148,7 @@ def _fetch_sp500_stocks(count: int = 100) -> list[dict]:
     try:
         data = yf.download(symbols, period="2d", progress=False, threads=True)
     except Exception:
+        log.warning("[Heatmap] Failed to download S&P 500 price data", exc_info=True)
         return []
 
     if data.empty or len(data) < 2:
@@ -177,6 +193,7 @@ def _fetch_kr_top_stocks(count: int = 30) -> list[dict]:
             })
         return results
     except Exception:
+        log.warning("[Heatmap] Failed to fetch KR top stocks", exc_info=True)
         return []
 
 
@@ -337,6 +354,27 @@ def generate_kr_heatmap(count: int = 30) -> BytesIO:
 
 # --- Cog ---
 
+def _build_remaining_embed(
+    remaining: list[dict], start_rank: int, include_symbol: bool = False,
+) -> discord.Embed | None:
+    """나머지 종목 텍스트 embed를 생성한다."""
+    if not remaining:
+        return None
+    lines = []
+    for i, s in enumerate(remaining, start=start_rank):
+        sign = "+" if s["change_pct"] >= 0 else ""
+        sym = f" ({s['symbol']})" if include_symbol and s.get("symbol") else ""
+        lines.append(f"`{i:>3}.` {s['name']}{sym}  **{sign}{s['change_pct']:.1f}%**")
+    text = "\n".join(lines)
+    if len(text) > 4096:
+        text = text[:4090] + "\n..."
+    return discord.Embed(
+        title=f"📋 {start_rank}~{start_rank + len(remaining) - 1}위",
+        description=text,
+        color=discord.Color.dark_teal(),
+    )
+
+
 class HeatmapMarket(discord.Enum):
     us = "us"
     kr = "kr"
@@ -389,23 +427,10 @@ class Heatmap(commands.Cog):
             embed1.set_image(url=f"attachment://{filename}")
             embed1.set_footer(text="초록=상승 | 빨강=하락")
 
-            # Embed 2: 나머지 종목 텍스트 (count+1 ~ 100위)
             remaining = all_stocks[count:]
             embeds = [embed1]
-            if remaining:
-                lines = []
-                for i, s in enumerate(remaining, start=count + 1):
-                    sign = "+" if s["change_pct"] >= 0 else ""
-                    lines.append(f"`{i:>3}.` {s['name']}  **{sign}{s['change_pct']:.1f}%**")
-                text = "\n".join(lines)
-                # Discord embed description 4096자 제한 대응
-                if len(text) > 4096:
-                    text = text[:4090] + "\n..."
-                embed2 = discord.Embed(
-                    title=f"📋 {count + 1}~{count + len(remaining)}위",
-                    description=text,
-                    color=discord.Color.dark_teal(),
-                )
+            embed2 = _build_remaining_embed(remaining, count + 1)
+            if embed2:
                 embeds.append(embed2)
 
             file = discord.File(buf, filename=filename)
@@ -423,19 +448,8 @@ class Heatmap(commands.Cog):
             embed1.set_footer(text="초록=상승 | 빨강=하락")
 
             embeds = [embed1]
-            if remaining:
-                lines = []
-                for i, s in enumerate(remaining, start=count + 1):
-                    sign = "+" if s["change_pct"] >= 0 else ""
-                    lines.append(f"`{i:>3}.` {s['name']} ({s['symbol']})  **{sign}{s['change_pct']:.1f}%**")
-                text = "\n".join(lines)
-                if len(text) > 4096:
-                    text = text[:4090] + "\n..."
-                embed2 = discord.Embed(
-                    title=f"📋 {count + 1}~{count + len(remaining)}위",
-                    description=text,
-                    color=discord.Color.dark_teal(),
-                )
+            embed2 = _build_remaining_embed(remaining, count + 1, include_symbol=True)
+            if embed2:
                 embeds.append(embed2)
 
             file = discord.File(buf, filename=filename)

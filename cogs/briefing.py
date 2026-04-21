@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timedelta, time
+from datetime import datetime, time
 from xml.etree import ElementTree
 
 import discord
@@ -113,8 +113,8 @@ _MAX_RETRIES = 3
 _RETRY_DELAY = 30  # seconds
 
 
-def _generate_briefing(market_data: dict, news: list[str], market_type: str) -> str | None:
-    """Gemini를 사용하여 시황 브리핑을 생성한다. 503 시 재시도 + 폴백 모델."""
+def _generate_briefing(market_data: dict, news: list[str], market_type: str) -> tuple[str, str] | None:
+    """Gemini를 사용하여 시황 브리핑을 생성한다. 반환: (text, model_name) 또는 None."""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         log.warning("[Briefing] GEMINI_API_KEY not set, skipping briefing")
@@ -164,7 +164,7 @@ def _generate_briefing(market_data: dict, news: list[str], market_type: str) -> 
                 )
                 text = response.text
                 if text and text.strip():
-                    return text.strip()
+                    return text.strip(), model
                 log.warning("[Briefing] %s returned empty response", model)
                 break  # empty response — try next model
             except ServerError as e:
@@ -215,18 +215,19 @@ class Briefing(commands.Cog):
                 asyncio.to_thread(_fetch_naver_news, 10),
             )
 
-            briefing = await asyncio.to_thread(_generate_briefing, data, news, "kr")
-            if not briefing:
+            result = await asyncio.to_thread(_generate_briefing, data, news, "kr")
+            if not result:
                 log.warning("[Briefing] KR briefing is empty, skipping post")
                 return
 
+            briefing, model_name = result
             embed = discord.Embed(
                 title="📝 🇰🇷 한국 시장 시황 브리핑",
                 description=briefing[:4096],
                 color=discord.Color.green(),
                 timestamp=datetime.now(KST),
             )
-            embed.set_footer(text="🤖 Gemini 2.5 Flash · 자동 시황 분석")
+            embed.set_footer(text=f"🤖 {model_name} · 자동 시황 분석")
 
             await self._send_to_channels(embed)
         except Exception:
@@ -248,18 +249,19 @@ class Briefing(commands.Cog):
                 asyncio.to_thread(_fetch_google_news, "stock market Wall Street", 10),
             )
 
-            briefing = await asyncio.to_thread(_generate_briefing, data, news, "us")
-            if not briefing:
+            result = await asyncio.to_thread(_generate_briefing, data, news, "us")
+            if not result:
                 log.warning("[Briefing] US briefing is empty, skipping post")
                 return
 
+            briefing, model_name = result
             embed = discord.Embed(
                 title="📝 🇺🇸 미국 시장 시황 브리핑",
                 description=briefing[:4096],
                 color=discord.Color.purple(),
                 timestamp=datetime.now(KST),
             )
-            embed.set_footer(text="🤖 Gemini 2.5 Flash · 자동 시황 분석")
+            embed.set_footer(text=f"🤖 {model_name} · 자동 시황 분석")
 
             await self._send_to_channels(embed)
         except Exception:
@@ -279,7 +281,7 @@ class Briefing(commands.Cog):
                     try:
                         await channel.send(embed=embed)
                     except discord.Forbidden:
-                        pass
+                        log.warning("[Briefing] No permission for channel %s in guild %s", ch_id, guild.id)
 
 
 async def setup(bot: commands.Bot):

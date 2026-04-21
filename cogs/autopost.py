@@ -18,9 +18,10 @@ log = logging.getLogger(__name__)
 
 US_EASTERN = ZoneInfo("America/New_York")  # EST/EDT 자동 전환
 
-# 한국·미국 공휴일 캘린더 (매년 자동 갱신)
-_KR_HOLIDAYS = holidays.KR(years=range(2024, 2030))
-_US_HOLIDAYS = holidays.NYSE(years=range(2024, 2030))
+# 한국·미국 공휴일 캘린더 (현재 연도 기준 ±2년)
+_current_year = datetime.now().year
+_KR_HOLIDAYS = holidays.KR(years=range(_current_year, _current_year + 3))
+_US_HOLIDAYS = holidays.NYSE(years=range(_current_year, _current_year + 3))
 
 
 def _is_kr_market_open() -> bool:
@@ -85,6 +86,7 @@ def _fetch_quote(symbol: str) -> dict | None:
         change_pct = (change / prev * 100) if prev else 0
         return {"price": price, "change": change, "change_pct": change_pct}
     except Exception:
+        log.warning("[AutoPost] Failed to fetch quote for %s", symbol, exc_info=True)
         return None
 
 
@@ -119,6 +121,7 @@ def _fetch_naver_index(market: str) -> dict | None:
             "low": today["lowPrice"],
         }
     except Exception:
+        log.warning("[AutoPost] Failed to fetch index %s", market, exc_info=True)
         return None
 
 
@@ -142,6 +145,7 @@ def _fetch_naver_top_stocks(market: str, sort: str, count: int = 5) -> list[dict
             })
         return results
     except Exception:
+        log.warning("[AutoPost] Failed to fetch top stocks %s/%s", market, sort, exc_info=True)
         return []
 
 
@@ -381,8 +385,10 @@ class AutoPost(commands.Cog):
         pct = data["change_pct"]
         last = self._last_alert.get(key)
 
-        if last is not None and abs(pct) < abs(last) + ALERT_STEP:
-            return
+        if last is not None:
+            direction_changed = (pct > 0) != (last > 0)
+            if not direction_changed and abs(pct) < abs(last) + ALERT_STEP:
+                return
 
         if abs(pct) >= ALERT_THRESHOLD:
             self._last_alert[key] = pct
@@ -424,7 +430,7 @@ class AutoPost(commands.Cog):
                         else:
                             await channel.send(embed=embed)
                     except discord.Forbidden:
-                        pass
+                        log.warning("[AutoPost] No permission for channel %s in guild %s", ch_id, guild.id)
 
 
 async def setup(bot: commands.Bot):
