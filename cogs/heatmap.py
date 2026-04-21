@@ -84,16 +84,51 @@ def _fetch_sp500_list() -> list[tuple[str, str]]:
         return _sp500_cache or []
 
 
-def _fetch_sp500_stocks(count: int = 100) -> list[dict]:
-    """S&P 500 거래대금 상위 종목 데이터를 가져온다 (일괄 다운로드)."""
-    import pandas as pd
+_mcap_cache: list[tuple[str, str, float]] = []  # [(symbol, name, marketCap), ...]
+_mcap_cache_time: float = 0
+_MCAP_CACHE_TTL = 86400  # 24시간
+
+
+def _fetch_sp500_mcap_ranking(top_n: int = 100) -> list[tuple[str, str, float]]:
+    """S&P 500 시가총액 순위를 가져온다 (1시간 캐시)."""
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor
+    global _mcap_cache, _mcap_cache_time
+
+    if _mcap_cache and (_time.time() - _mcap_cache_time) < _MCAP_CACHE_TTL:
+        return _mcap_cache[:top_n]
 
     sp500 = _fetch_sp500_list()
     if not sp500:
+        return _mcap_cache[:top_n] if _mcap_cache else []
+
+    def _get_mcap(item: tuple[str, str]) -> tuple[str, str, float]:
+        sym, name = item
+        try:
+            mc = yf.Ticker(sym).fast_info.get("marketCap") or 0
+            return (sym, name, float(mc))
+        except Exception:
+            return (sym, name, 0)
+
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        results = list(ex.map(_get_mcap, sp500))
+
+    valid = [(s, n, mc) for s, n, mc in results if mc > 0]
+    valid.sort(key=lambda x: x[2], reverse=True)
+
+    _mcap_cache = valid
+    _mcap_cache_time = _time.time()
+    return valid[:top_n]
+
+
+def _fetch_sp500_stocks(count: int = 100) -> list[dict]:
+    """S&P 500 시가총액 상위 종목 + 실시간 가격 데이터."""
+    ranking = _fetch_sp500_mcap_ranking(count)
+    if not ranking:
         return []
 
-    sym_to_name = dict(sp500)
-    symbols = [s for s, _ in sp500]
+    symbols = [s for s, _, _ in ranking]
+    sym_to_name = {s: n for s, n, _ in ranking}
 
     try:
         data = yf.download(symbols, period="2d", progress=False, threads=True)
@@ -105,16 +140,15 @@ def _fetch_sp500_stocks(count: int = 100) -> list[dict]:
 
     close = data["Close"].iloc[-1]
     prev_close = data["Close"].iloc[-2]
-    volume = data["Volume"].iloc[-1]
-
     pct_change = ((close - prev_close) / prev_close * 100).dropna()
-    dollar_vol = (close * volume).dropna().sort_values(ascending=False)
 
     results = []
-    for sym in dollar_vol.index[:count]:
-        pct = pct_change.get(sym, 0)
+    for sym, name, _ in ranking:
+        pct = pct_change.get(sym)
+        if pct is None:
+            continue
         results.append({
-            "name": sym_to_name.get(sym, sym),
+            "name": name,
             "symbol": sym,
             "change_pct": round(float(pct), 2),
         })
