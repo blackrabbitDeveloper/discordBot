@@ -2,9 +2,12 @@ import asyncio
 from datetime import datetime
 from io import BytesIO
 
+import os
+
 import discord
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as patheffects
+import matplotlib.font_manager as fm
 import squarify
 import requests
 import yfinance as yf
@@ -13,6 +16,15 @@ from discord.ext import commands
 
 from cogs.utils.constants import KST, NAVER_HEADERS, SECTOR_ETFS
 from cogs.utils.chart import FONT_NAME  # noqa: F401 – triggers matplotlib setup
+from cogs.autopost import _fetch_naver_index
+
+# 히트맵 전용 Black (가장 두꺼운) 폰트
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
+_BLACK_FONT_PATH = os.path.join(_PROJECT_ROOT, "assets", "fonts", "NotoSansKR-Black.ttf")
+_BLACK_FONT = None
+if os.path.exists(_BLACK_FONT_PATH):
+    fm.fontManager.addfont(_BLACK_FONT_PATH)
+    _BLACK_FONT = fm.FontProperties(fname=_BLACK_FONT_PATH)
 
 
 # --- 데이터 fetching ---
@@ -40,11 +52,12 @@ def _fetch_us_sector_data() -> list[dict]:
     return results
 
 
-def _fetch_kr_top_stocks(count: int = 20) -> list[dict]:
+def _fetch_kr_top_stocks(count: int = 30) -> list[dict]:
     """네이버에서 코스피 시가총액 상위 종목."""
     try:
-        url = f"https://m.stock.naver.com/api/stocks/marketValue/KOSPI"
-        r = requests.get(url, headers=NAVER_HEADERS, timeout=10)
+        url = "https://m.stock.naver.com/api/stocks/marketValue/KOSPI"
+        r = requests.get(url, headers=NAVER_HEADERS, timeout=10,
+                         params={"pageSize": count})
         if r.status_code != 200:
             return []
         data = r.json()
@@ -55,7 +68,6 @@ def _fetch_kr_top_stocks(count: int = 20) -> list[dict]:
             direction = s["compareToPreviousPrice"]["name"]
             if direction in ("FALLING", "LOWER_LIMIT"):
                 pct = -abs(pct)
-            # 시가총액 근사 (순위 기반 가중치)
             results.append({
                 "name": s["stockName"],
                 "change_pct": pct,
@@ -67,21 +79,50 @@ def _fetch_kr_top_stocks(count: int = 20) -> list[dict]:
 
 # --- 히트맵 생성 ---
 
+_COLOR_STOPS_UP = [
+    (0.0, (65, 69, 84)),    # 중립 회색 (#414554)
+    (0.5, (52, 82, 62)),    # 미세 상승
+    (1.0, (43, 122, 62)),   # 약 상승 (#2b7a3e)
+    (2.0, (47, 158, 68)),   # 상승 (#2f9e44)
+    (3.0, (48, 204, 90)),   # 강 상승 (#30cc5a)
+]
+_COLOR_STOPS_DN = [
+    (0.0, (65, 69, 84)),    # 중립 회색 (#414554)
+    (0.5, (120, 55, 55)),   # 미세 하락
+    (1.0, (168, 32, 32)),   # 약 하락 (#a82020)
+    (2.0, (201, 42, 42)),   # 하락 (#c92a2a)
+    (3.0, (224, 82, 82)),   # 강 하락 (#e05252)
+]
+
+
+def _lerp_color(stops: list[tuple], val: float) -> tuple[int, int, int]:
+    """색상 정지점 사이를 선형 보간."""
+    val = abs(val)
+    if val <= stops[0][0]:
+        return stops[0][1]
+    if val >= stops[-1][0]:
+        return stops[-1][1]
+    for i in range(len(stops) - 1):
+        lo_v, lo_c = stops[i]
+        hi_v, hi_c = stops[i + 1]
+        if lo_v <= val <= hi_v:
+            t = (val - lo_v) / (hi_v - lo_v)
+            return (
+                int(lo_c[0] + t * (hi_c[0] - lo_c[0])),
+                int(lo_c[1] + t * (hi_c[1] - lo_c[1])),
+                int(lo_c[2] + t * (hi_c[2] - lo_c[2])),
+            )
+    return stops[-1][1]
+
+
 def _change_to_color(pct: float) -> str:
-    """변동률을 Finviz 스타일 빨강-회색-초록 색상으로 변환."""
-    intensity = min(abs(pct) / 3.0, 1.0)  # ±3% 에서 최대 채도
+    """변동률을 Finviz 스타일 색상으로 변환 (구간별 보간)."""
     if pct > 0:
-        # 어두운 초록 → 진한 초록 (Finviz 스타일)
-        r = int(45 * (1 - intensity))
-        g = int(70 + intensity * 90)
-        b = int(45 * (1 - intensity))
+        r, g, b = _lerp_color(_COLOR_STOPS_UP, pct)
     elif pct < 0:
-        # 어두운 빨강 → 진한 빨강
-        r = int(70 + intensity * 110)
-        g = int(45 * (1 - intensity))
-        b = int(45 * (1 - intensity))
+        r, g, b = _lerp_color(_COLOR_STOPS_DN, pct)
     else:
-        r, g, b = 50, 50, 55
+        r, g, b = 42, 48, 50
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
@@ -128,11 +169,15 @@ def _render_heatmap(
         w = block["dx"]
         h = block["dy"]
 
+        # 블록이 너무 작으면 텍스트 생략
+        area = w * h
+        if area < 15:
+            continue
+
         sign = "+" if item["change_pct"] >= 0 else ""
         pct_text = f"{sign}{item['change_pct']:.1f}%"
 
         # 블록 크기에 따라 폰트 크기 조정
-        area = w * h
         name_size = max(min(area ** 0.4 * 1.2, 16), 7)
         pct_size = max(min(area ** 0.4 * 1.0, 14), 6)
 
@@ -142,12 +187,14 @@ def _render_heatmap(
         else:
             label = item["name"]
 
+        _shadow = [patheffects.withSimplePatchShadow(offset=(1.5, -1.5), shadow_rgbFace="black", alpha=0.6)]
+        _fp = {"fontproperties": _BLACK_FONT} if _BLACK_FONT else {"fontweight": "bold"}
         ax.text(x, y + 1, label, ha="center", va="center",
-                fontsize=name_size, fontweight="bold", color="white",
-                path_effects=[patheffects.withStroke(linewidth=2, foreground="#00000080")])
+                fontsize=name_size, color="white",
+                path_effects=_shadow, **_fp)
         ax.text(x, y - h * 0.15, pct_text, ha="center", va="center",
-                fontsize=pct_size, color="#ffffffdd",
-                path_effects=[patheffects.withStroke(linewidth=1.5, foreground="#00000080")])
+                fontsize=pct_size, color="white",
+                path_effects=_shadow, **_fp)
 
     ax.set_title(title, fontsize=18, fontweight="bold", color="white", pad=15)
     ax.set_axis_off()
@@ -167,11 +214,11 @@ def generate_us_heatmap() -> BytesIO:
     return _render_heatmap(data, f"미국 섹터 히트맵 ({now})", use_weight=True)
 
 
-def generate_kr_heatmap() -> BytesIO:
+def generate_kr_heatmap(count: int = 30) -> BytesIO:
     """한국 시가총액 히트맵 생성."""
-    data = _fetch_kr_top_stocks(20)
+    data = _fetch_kr_top_stocks(count)
     now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
-    return _render_heatmap(data, f"코스피 시가총액 TOP 20 ({now})", use_weight=False)
+    return _render_heatmap(data, f"코스피 시가총액 TOP {count} ({now})", use_weight=False)
 
 
 # --- Cog ---
@@ -187,31 +234,81 @@ class Heatmap(commands.Cog):
 
     @app_commands.checks.cooldown(1, 5)
     @app_commands.command(name="heatmap", description="시장 히트맵을 생성합니다")
-    @app_commands.describe(market="시장 선택 (us: 미국 섹터, kr: 한국 시가총액)")
+    @app_commands.describe(
+        market="시장 선택 (us: 미국 섹터, kr: 한국 시가총액)",
+        count="한국 시장 히트맵 종목 수 (기본 30, 최대 50)",
+    )
     async def heatmap(
         self,
         interaction: discord.Interaction,
         market: HeatmapMarket = HeatmapMarket.us,
+        count: int = 30,
     ):
         await interaction.response.defer(ephemeral=True)
+        count = max(10, min(count, 50))
 
         if market == HeatmapMarket.kr:
-            buf = await asyncio.to_thread(generate_kr_heatmap)
+            # 히트맵용 + 텍스트 목록용 데이터 병렬 fetch
+            all_stocks, kospi, kosdaq, buf = await asyncio.gather(
+                asyncio.to_thread(_fetch_kr_top_stocks, 100),
+                asyncio.to_thread(_fetch_naver_index, "KOSPI"),
+                asyncio.to_thread(_fetch_naver_index, "KOSDAQ"),
+                asyncio.to_thread(generate_kr_heatmap, count),
+            )
             filename = "kr_heatmap.png"
+
+            # Embed 1: 시장 요약 + 히트맵
+            summary_lines = []
+            for name, idx in [("코스피", kospi), ("코스닥", kosdaq)]:
+                if idx:
+                    sign = "+" if idx["direction"] in ("RISING", "UPPER_LIMIT") else ""
+                    icon = "🟢" if idx["direction"] in ("RISING", "UPPER_LIMIT") else "🔴" if idx["direction"] in ("FALLING", "LOWER_LIMIT") else "⚪"
+                    summary_lines.append(f"{icon} **{name}** {idx['close']}  ({sign}{idx['change_pct']}%)")
+            summary = "\n".join(summary_lines) if summary_lines else ""
+
+            embed1 = discord.Embed(
+                title=f"🗺️ 코스피 시가총액 TOP {count}",
+                description=f"📊 **시장 요약**\n{summary}" if summary else None,
+                color=discord.Color.dark_teal(),
+                timestamp=datetime.now(KST),
+            )
+            embed1.set_image(url=f"attachment://{filename}")
+            embed1.set_footer(text="초록=상승 | 빨강=하락")
+
+            # Embed 2: 나머지 종목 텍스트 (count+1 ~ 100위)
+            remaining = all_stocks[count:]
+            embeds = [embed1]
+            if remaining:
+                lines = []
+                for i, s in enumerate(remaining, start=count + 1):
+                    sign = "+" if s["change_pct"] >= 0 else ""
+                    lines.append(f"`{i:>3}.` {s['name']}  **{sign}{s['change_pct']:.1f}%**")
+                text = "\n".join(lines)
+                # Discord embed description 4096자 제한 대응
+                if len(text) > 4096:
+                    text = text[:4090] + "\n..."
+                embed2 = discord.Embed(
+                    title=f"📋 {count + 1}~{count + len(remaining)}위",
+                    description=text,
+                    color=discord.Color.dark_teal(),
+                )
+                embeds.append(embed2)
+
+            file = discord.File(buf, filename=filename)
+            await interaction.followup.send(embeds=embeds, file=file, ephemeral=True)
         else:
             buf = await asyncio.to_thread(generate_us_heatmap)
             filename = "us_heatmap.png"
 
-        file = discord.File(buf, filename=filename)
-        embed = discord.Embed(
-            title="🗺️ 시장 히트맵",
-            color=discord.Color.dark_teal(),
-            timestamp=datetime.now(KST),
-        )
-        embed.set_image(url=f"attachment://{filename}")
-        embed.set_footer(text="초록=상승 | 빨강=하락")
-
-        await interaction.followup.send(embed=embed, file=file, ephemeral=True)
+            file = discord.File(buf, filename=filename)
+            embed = discord.Embed(
+                title="🗺️ 미국 섹터 히트맵",
+                color=discord.Color.dark_teal(),
+                timestamp=datetime.now(KST),
+            )
+            embed.set_image(url=f"attachment://{filename}")
+            embed.set_footer(text="초록=상승 | 빨강=하락")
+            await interaction.followup.send(embed=embed, file=file, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
