@@ -52,6 +52,75 @@ def _fetch_us_sector_data() -> list[dict]:
     return results
 
 
+_sp500_cache: list[tuple[str, str]] = []
+_sp500_cache_time: float = 0
+
+
+def _fetch_sp500_list() -> list[tuple[str, str]]:
+    """위키피디아에서 S&P 500 종목 목록을 가져온다 (24시간 캐시)."""
+    import time as _time
+    global _sp500_cache, _sp500_cache_time
+
+    if _sp500_cache and (_time.time() - _sp500_cache_time) < 86400:
+        return _sp500_cache
+
+    try:
+        from io import StringIO
+        r = requests.get(
+            "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
+            headers={"User-Agent": "Mozilla/5.0"}, timeout=10,
+        )
+        if r.status_code != 200:
+            return _sp500_cache or []
+        import pandas as pd
+        df = pd.read_html(StringIO(r.text))[0]
+        _sp500_cache = [
+            (sym.replace(".", "-"), name)
+            for sym, name in zip(df["Symbol"], df["Security"])
+        ]
+        _sp500_cache_time = _time.time()
+        return _sp500_cache
+    except Exception:
+        return _sp500_cache or []
+
+
+def _fetch_sp500_stocks(count: int = 100) -> list[dict]:
+    """S&P 500 거래대금 상위 종목 데이터를 가져온다 (일괄 다운로드)."""
+    import pandas as pd
+
+    sp500 = _fetch_sp500_list()
+    if not sp500:
+        return []
+
+    sym_to_name = dict(sp500)
+    symbols = [s for s, _ in sp500]
+
+    try:
+        data = yf.download(symbols, period="2d", progress=False, threads=True)
+    except Exception:
+        return []
+
+    if data.empty or len(data) < 2:
+        return []
+
+    close = data["Close"].iloc[-1]
+    prev_close = data["Close"].iloc[-2]
+    volume = data["Volume"].iloc[-1]
+
+    pct_change = ((close - prev_close) / prev_close * 100).dropna()
+    dollar_vol = (close * volume).dropna().sort_values(ascending=False)
+
+    results = []
+    for sym in dollar_vol.index[:count]:
+        pct = pct_change.get(sym, 0)
+        results.append({
+            "name": sym_to_name.get(sym, sym),
+            "symbol": sym,
+            "change_pct": round(float(pct), 2),
+        })
+    return results
+
+
 def _fetch_kr_top_stocks(count: int = 30) -> list[dict]:
     """네이버에서 코스피 시가총액 상위 종목."""
     try:
@@ -182,8 +251,8 @@ def _render_heatmap(
         pct_size = max(min(area ** 0.4 * 1.0, 14), 6)
 
         symbol = item.get("symbol", "")
-        if symbol and w > 12:
-            label = f"{item['name']}\n{symbol}"
+        if symbol:
+            label = symbol
         else:
             label = item["name"]
 
@@ -212,6 +281,16 @@ def generate_us_heatmap() -> BytesIO:
     data = _fetch_us_sector_data()
     now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
     return _render_heatmap(data, f"미국 섹터 히트맵 ({now})", use_weight=True)
+
+
+def generate_sp500_heatmap(count: int = 30, total: int = 100) -> tuple[BytesIO, list[dict]]:
+    """S&P 500 시가총액 히트맵 + 나머지 종목 리스트 반환."""
+    all_stocks = _fetch_sp500_stocks(total)
+    heatmap_stocks = all_stocks[:count]
+    remaining = all_stocks[count:]
+    now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
+    buf = _render_heatmap(heatmap_stocks, f"S&P 500 시가총액 TOP {count} ({now})", use_weight=False)
+    return buf, remaining
 
 
 def generate_kr_heatmap(count: int = 30) -> BytesIO:
@@ -297,18 +376,35 @@ class Heatmap(commands.Cog):
             file = discord.File(buf, filename=filename)
             await interaction.followup.send(embeds=embeds, file=file, ephemeral=True)
         else:
-            buf = await asyncio.to_thread(generate_us_heatmap)
+            buf, remaining = await asyncio.to_thread(generate_sp500_heatmap, count, 100)
             filename = "us_heatmap.png"
 
-            file = discord.File(buf, filename=filename)
-            embed = discord.Embed(
-                title="🗺️ 미국 섹터 히트맵",
+            embed1 = discord.Embed(
+                title=f"🗺️ S&P 500 시가총액 TOP {count}",
                 color=discord.Color.dark_teal(),
                 timestamp=datetime.now(KST),
             )
-            embed.set_image(url=f"attachment://{filename}")
-            embed.set_footer(text="초록=상승 | 빨강=하락")
-            await interaction.followup.send(embed=embed, file=file, ephemeral=True)
+            embed1.set_image(url=f"attachment://{filename}")
+            embed1.set_footer(text="초록=상승 | 빨강=하락")
+
+            embeds = [embed1]
+            if remaining:
+                lines = []
+                for i, s in enumerate(remaining, start=count + 1):
+                    sign = "+" if s["change_pct"] >= 0 else ""
+                    lines.append(f"`{i:>3}.` {s['name']} ({s['symbol']})  **{sign}{s['change_pct']:.1f}%**")
+                text = "\n".join(lines)
+                if len(text) > 4096:
+                    text = text[:4090] + "\n..."
+                embed2 = discord.Embed(
+                    title=f"📋 {count + 1}~{count + len(remaining)}위",
+                    description=text,
+                    color=discord.Color.dark_teal(),
+                )
+                embeds.append(embed2)
+
+            file = discord.File(buf, filename=filename)
+            await interaction.followup.send(embeds=embeds, file=file, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
