@@ -4,6 +4,7 @@ from io import BytesIO
 
 import discord
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as patheffects
 import squarify
 import requests
 import yfinance as yf
@@ -67,18 +68,20 @@ def _fetch_kr_top_stocks(count: int = 20) -> list[dict]:
 # --- 히트맵 생성 ---
 
 def _change_to_color(pct: float) -> str:
-    """변동률을 빨강-회색-초록 색상으로 변환."""
+    """변동률을 Finviz 스타일 빨강-회색-초록 색상으로 변환."""
     intensity = min(abs(pct) / 3.0, 1.0)  # ±3% 에서 최대 채도
     if pct > 0:
-        r = int(40 + (1 - intensity) * 80)
-        g = int(120 + intensity * 135)
-        b = int(40 + (1 - intensity) * 80)
+        # 어두운 초록 → 진한 초록 (Finviz 스타일)
+        r = int(45 * (1 - intensity))
+        g = int(70 + intensity * 90)
+        b = int(45 * (1 - intensity))
     elif pct < 0:
-        r = int(120 + intensity * 135)
-        g = int(40 + (1 - intensity) * 80)
-        b = int(40 + (1 - intensity) * 80)
+        # 어두운 빨강 → 진한 빨강
+        r = int(70 + intensity * 110)
+        g = int(45 * (1 - intensity))
+        b = int(45 * (1 - intensity))
     else:
-        r, g, b = 128, 128, 128
+        r, g, b = 50, 50, 55
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
@@ -106,15 +109,15 @@ def _render_heatmap(
     colors = [_change_to_color(item["change_pct"]) for item in items]
 
     fig, ax = plt.subplots(figsize=(12, 7))
-    fig.patch.set_facecolor("#1a1a2e")
-    ax.set_facecolor("#1a1a2e")
+    fig.patch.set_facecolor("#141417")
+    ax.set_facecolor("#141417")
 
     rects = squarify.plot(
         sizes=sizes,
         label=None,
         color=colors,
         ax=ax,
-        bar_kwargs={"linewidth": 2, "edgecolor": "#1a1a2e"},
+        bar_kwargs={"linewidth": 2, "edgecolor": "#141417"},
     )
 
     # 각 블록에 텍스트 추가
@@ -140,9 +143,11 @@ def _render_heatmap(
             label = item["name"]
 
         ax.text(x, y + 1, label, ha="center", va="center",
-                fontsize=name_size, fontweight="bold", color="white")
+                fontsize=name_size, fontweight="bold", color="white",
+                path_effects=[patheffects.withStroke(linewidth=2, foreground="#00000080")])
         ax.text(x, y - h * 0.15, pct_text, ha="center", va="center",
-                fontsize=pct_size, color="white", alpha=0.9)
+                fontsize=pct_size, color="#ffffffdd",
+                path_effects=[patheffects.withStroke(linewidth=1.5, foreground="#00000080")])
 
     ax.set_title(title, fontsize=18, fontweight="bold", color="white", pad=15)
     ax.set_axis_off()
