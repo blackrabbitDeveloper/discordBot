@@ -7,12 +7,11 @@ import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 
-from cogs.utils.constants import DATA_DIR
-
 matplotlib.use("Agg")
 
-# Font setup
-_FONT_PATH = os.path.join(DATA_DIR, "fonts", "NotoSansKR-Bold.ttf")
+# Font setup — assets/ is repo-static, not shadowed by Railway volume mount on data/
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+_FONT_PATH = os.path.join(_PROJECT_ROOT, "assets", "fonts", "NotoSansKR-Bold.ttf")
 
 
 def setup_font() -> str | None:
